@@ -19,6 +19,7 @@ class TestRunner {
     this.tests = [];
     this.passed = 0;
     this.failed = 0;
+    this.pending = [];
   }
 
   describe(name, fn) {
@@ -26,28 +27,45 @@ class TestRunner {
     fn();
   }
 
+  // `fn` may be sync or async. Async results are queued and awaited by
+  // `finish()` before the summary is printed — otherwise a test whose body
+  // is still pending when `it()` returns would be reported as passed
+  // unconditionally (nothing ever awaited it, including its assertions).
   it(name, fn) {
+    let result;
     try {
-      fn();
-      this.passed++;
-      console.log(`  ✅ ${name}`);
+      result = fn();
     } catch (err) {
       this.failed++;
       console.error(`  ❌ ${name}`);
       console.error(`     ${err.message}`);
+      return;
     }
+
+    if (result && typeof result.then === "function") {
+      this.pending.push(
+        result.then(
+          () => {
+            this.passed++;
+            console.log(`  ✅ ${name}`);
+          },
+          (err) => {
+            this.failed++;
+            console.error(`  ❌ ${name}`);
+            console.error(`     ${err.message}`);
+          }
+        )
+      );
+      return;
+    }
+
+    this.passed++;
+    console.log(`  ✅ ${name}`);
   }
 
-  async itAsync(name, fn) {
-    try {
-      await fn();
-      this.passed++;
-      console.log(`  ✅ ${name}`);
-    } catch (err) {
-      this.failed++;
-      console.error(`  ❌ ${name}`);
-      console.error(`     ${err.message}`);
-    }
+  async finish() {
+    await Promise.all(this.pending);
+    return this.summary();
   }
 
   summary() {
@@ -312,14 +330,19 @@ runner.describe("DataStore (SQLite)", () => {
 
   runner.it("should allow register 0 to be stored without SQLite NULL constraint errors", async () => {
     const dataStore = require("./datastore.js");
+    // Unique per run: the DB file persists across test runs, and
+    // getReadingsByTag() matches by tag name across all history, so a
+    // fixed name would accumulate rows and break the length assertion
+    // after the first run.
     const scanId = `zero-reg-${Date.now()}`;
+    const tagName = `Ambient_Temperature_${scanId}`;
 
     await dataStore.init();
     try {
       await dataStore.recordScanStart(scanId, "127.0.0.1", 502, 1, "yaml_scan");
       await dataStore.recordReading(scanId, "127.0.0.1", 502, 1, {
         register: 0,
-        name: "Ambient_Temperature",
+        name: tagName,
         section: "Ambient",
         dataType: "int16",
         unit: "°C",
@@ -329,7 +352,7 @@ runner.describe("DataStore (SQLite)", () => {
         sanity: { status: "ok", reason: "" },
       });
 
-      const rows = await dataStore.getReadingsByTag("Ambient_Temperature");
+      const rows = await dataStore.getReadingsByTag(tagName);
       assert.strictEqual(rows.length, 1);
       assert.strictEqual(rows[0].register, 0);
     } finally {
@@ -639,8 +662,7 @@ runner.describe("Dashboard State Management", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 if (require.main === module) {
-  const success = runner.summary();
-  process.exit(success ? 0 : 1);
+  runner.finish().then((success) => process.exit(success ? 0 : 1));
 }
 
 module.exports = { TestRunner, runner };
