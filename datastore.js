@@ -393,19 +393,15 @@ class DataStore {
         return;
       }
 
+      // SQLite has no DISTINCT ON; this correlated subquery gets the same
+      // "latest row per register" result.
       const sql = `
-        SELECT DISTINCT ON (register) * FROM readings
-        ORDER BY register, timestamp DESC
-      `;
-
-      // SQLite doesn't support DISTINCT ON, use GROUP BY instead
-      const sqliteSql = `
         SELECT * FROM readings r1
         WHERE timestamp = (SELECT MAX(timestamp) FROM readings r2 WHERE r2.register = r1.register)
         ORDER BY register
       `;
 
-      this.db.all(sqliteSql, (err, rows) => {
+      this.db.all(sql, (err, rows) => {
         if (err) reject(err);
         else resolve(rows || []);
       });
@@ -477,24 +473,28 @@ class DataStore {
 
     const csvLines = [headers.map((h) => `"${h}"`).join(",")];
 
-    // CSV rows
+    // CSV rows. `orEmpty` (not `||`) throughout: register/port/unitId can
+    // legitimately be 0, and status/reason can legitimately be "" — `||`
+    // would coerce those to "" and lose real data (the same bug class
+    // fixed in recordReading()).
+    const orEmpty = (v) => (v !== null && v !== undefined ? v : "");
     for (const row of rows) {
       const line = [
-        row.timestamp || "",
-        row.ip || "",
-        row.port || "",
-        row.unitId || "",
-        row.register || "",
-        row.name || "",
-        row.section || "",
-        row.dataType || "",
-        row.unit || "",
-        row.value !== null && row.value !== undefined ? row.value : "",
-        row.scaledValue !== null && row.scaledValue !== undefined ? row.scaledValue : "",
-        row.sanity_status || "",
-        row.sanity_reason || "",
+        orEmpty(row.timestamp),
+        orEmpty(row.ip),
+        orEmpty(row.port),
+        orEmpty(row.unitId),
+        orEmpty(row.register),
+        orEmpty(row.name),
+        orEmpty(row.section),
+        orEmpty(row.dataType),
+        orEmpty(row.unit),
+        orEmpty(row.value),
+        orEmpty(row.scaledValue),
+        orEmpty(row.sanity_status),
+        orEmpty(row.sanity_reason),
       ];
-      csvLines.push(line.map((v) => `"${(v || "").toString().replace(/"/g, '""')}"`).join(","));
+      csvLines.push(line.map((v) => `"${orEmpty(v).toString().replace(/"/g, '""')}"`).join(","));
     }
 
     return csvLines.join("\n");

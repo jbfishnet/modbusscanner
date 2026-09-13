@@ -26,44 +26,40 @@ class TestRunner {
     fn();
   }
 
-  // `fn` may be sync or async. Async results are queued and awaited by
-  // `finish()` before the summary is printed — otherwise a test whose body
-  // is still pending when `it()` returns would be reported as passed
-  // unconditionally (nothing ever awaited it, including its assertions).
+  // Async tests are queued by name/fn (not invoked yet) and run strictly
+  // sequentially in finish() — several of them share the same DataStore
+  // singleton (init/recordReading/close), so running them concurrently
+  // would race on that shared connection. Sync tests still run immediately
+  // at registration time, as before.
   it(name, fn) {
-    let result;
+    if (fn.constructor.name === "AsyncFunction") {
+      this.pending.push({ name, fn });
+      return;
+    }
+
     try {
-      result = fn();
+      fn();
+      this.passed++;
+      console.log(`  ✅ ${name}`);
     } catch (err) {
       this.failed++;
       console.error(`  ❌ ${name}`);
       console.error(`     ${err.message}`);
-      return;
     }
-
-    if (result && typeof result.then === "function") {
-      this.pending.push(
-        result.then(
-          () => {
-            this.passed++;
-            console.log(`  ✅ ${name}`);
-          },
-          (err) => {
-            this.failed++;
-            console.error(`  ❌ ${name}`);
-            console.error(`     ${err.message}`);
-          }
-        )
-      );
-      return;
-    }
-
-    this.passed++;
-    console.log(`  ✅ ${name}`);
   }
 
   async finish() {
-    await Promise.all(this.pending);
+    for (const { name, fn } of this.pending) {
+      try {
+        await fn();
+        this.passed++;
+        console.log(`  ✅ ${name}`);
+      } catch (err) {
+        this.failed++;
+        console.error(`  ❌ ${name}`);
+        console.error(`     ${err.message}`);
+      }
+    }
     return this.summary();
   }
 
@@ -176,6 +172,40 @@ runner.describe("DataStore (SQLite)", () => {
       const rows = await dataStore.getReadingsByTag(tagName);
       assert.strictEqual(rows.length, 1);
       assert.strictEqual(rows[0].register, 0);
+    } finally {
+      await dataStore.close();
+    }
+  });
+
+  runner.it("should preserve falsy values (register 0, empty status) in CSV export", async () => {
+    const dataStore = require("./datastore.js");
+    const scanId = `csv-zero-${Date.now()}`;
+    const tagName = `Ambient_Temperature_${scanId}`;
+
+    await dataStore.init();
+    try {
+      await dataStore.recordScanStart(scanId, "127.0.0.1", 502, 1, "yaml_scan");
+      await dataStore.recordReading(scanId, "127.0.0.1", 502, 1, {
+        register: 0,
+        name: tagName,
+        section: "Ambient",
+        dataType: "int16",
+        unit: "°C",
+        value: 0,
+        scaledValue: 0,
+        raw: 0,
+        sanity: { status: "ok", reason: "" },
+      });
+
+      const csv = await dataStore.exportToCSV({ name: tagName });
+      const dataLine = csv.split("\n")[1];
+      const columns = dataLine.split(",");
+      // Register Address column (index 4): must be "0", not "" (`x || ""`
+      // would coerce a real 0 to empty — this is the export-side twin of
+      // the recordReading() falsy-coercion bug).
+      assert.strictEqual(columns[4], '"0"');
+      // Sanity Status column (index 11): "ok" must not be dropped.
+      assert(dataLine.includes('"ok"'));
     } finally {
       await dataStore.close();
     }
