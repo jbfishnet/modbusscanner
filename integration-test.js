@@ -53,9 +53,9 @@ function stopProcess(child) {
   });
 }
 
-function get(pathname, port) {
+function get(pathname, port, headers) {
   return new Promise((resolve, reject) => {
-    const request = http.get({ hostname: "127.0.0.1", port, path: pathname }, (response) => {
+    const request = http.get({ hostname: "127.0.0.1", port, path: pathname, headers }, (response) => {
       let body = "";
       response.setEncoding("utf8");
       response.on("data", (chunk) => { body += chunk; });
@@ -111,6 +111,12 @@ async function testHttpServer() {
     const target = JSON.parse(savedTargets.body).targets[0];
     assert.strictEqual(target.ip, "127.0.0.1");
     assert.strictEqual(target.lastStatus, "unreachable");
+
+    // A request carrying another site's Origin must be rejected — this is
+    // the app's only defense against a malicious page in another browser
+    // tab reaching into it, since there's no auth and no other CORS policy.
+    const crossOrigin = await get("/api/stats", port, { Origin: "http://evil.example" });
+    assert.strictEqual(crossOrigin.statusCode, 403);
   } finally {
     await stopProcess(server);
     if (fs.existsSync(databasePath)) fs.rmSync(databasePath);

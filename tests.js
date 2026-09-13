@@ -509,6 +509,47 @@ runner.describe("Dashboard State Management", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// SECURITY TESTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+runner.describe("Security", () => {
+  runner.it("binds to loopback by default (BIND_HOST)", () => {
+    delete require.cache[require.resolve("./src/config.js")];
+    const config = require("./src/config.js");
+    assert.strictEqual(config.BIND_HOST, "127.0.0.1");
+  });
+
+  runner.it("isTrustedOrigin allows requests with no Origin header (non-browser clients)", () => {
+    const { isTrustedOrigin } = require("./src/security.js");
+    assert.strictEqual(isTrustedOrigin({ host: "127.0.0.1:8080" }), true);
+  });
+
+  runner.it("isTrustedOrigin allows a same-origin request", () => {
+    const { isTrustedOrigin } = require("./src/security.js");
+    assert.strictEqual(
+      isTrustedOrigin({ host: "127.0.0.1:8080", origin: "http://127.0.0.1:8080" }),
+      true
+    );
+  });
+
+  runner.it("isTrustedOrigin rejects a cross-origin request", () => {
+    const { isTrustedOrigin } = require("./src/security.js");
+    assert.strictEqual(
+      isTrustedOrigin({ host: "127.0.0.1:8080", origin: "http://evil.example:1234" }),
+      false
+    );
+  });
+
+  runner.it("isTrustedOrigin rejects a malformed Origin header", () => {
+    const { isTrustedOrigin } = require("./src/security.js");
+    assert.strictEqual(
+      isTrustedOrigin({ host: "127.0.0.1:8080", origin: "not-a-url" }),
+      false
+    );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // RUN TESTS
 // ═══════════════════════════════════════════════════════════════════════════
 

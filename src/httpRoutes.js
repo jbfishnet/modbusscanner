@@ -4,6 +4,7 @@ const fs = require("fs");
 const net = require("net");
 const path = require("path");
 const { normalizeTarget } = require("./validation");
+const { isTrustedOrigin } = require("./security");
 const config = require("./config");
 
 function sendJson(res, statusCode, payload) {
@@ -213,6 +214,12 @@ function createHttpHandler({ dataStore }) {
   ];
 
   return function handleRequest(req, res) {
+    if (!isTrustedOrigin(req.headers)) {
+      res.writeHead(403);
+      res.end("Forbidden: cross-origin request rejected");
+      return;
+    }
+
     const url = new URL(req.url, `http://${req.headers.host}`);
     const route = routes.find((r) => r.method === req.method && r.path === url.pathname);
 

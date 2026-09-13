@@ -17,6 +17,7 @@ const config = require("./src/config");
 const logger = require("./src/logger");
 const { createHttpHandler } = require("./src/httpRoutes");
 const { createConnectionHandler } = require("./src/wsHandlers");
+const { isTrustedOrigin } = require("./src/security");
 
 let httpServer;
 
@@ -37,12 +38,16 @@ async function start() {
     await initDataStore();
 
     httpServer = http.createServer(createHttpHandler({ dataStore }));
-    const wss = new WebSocketServer({ server: httpServer });
+    const wss = new WebSocketServer({
+      server: httpServer,
+      verifyClient: (info) => isTrustedOrigin(info.req.headers),
+    });
     wss.on("connection", createConnectionHandler({ dataStore }));
 
     await new Promise((resolve) => {
-      httpServer.listen(config.HTTP_PORT, () => {
+      httpServer.listen(config.HTTP_PORT, config.BIND_HOST, () => {
         logger.info(`Modbus Scanner with persistence running → http://localhost:${config.HTTP_PORT}`);
+        logger.info(`Bound to ${config.BIND_HOST} (set BIND_HOST to allow LAN access)`);
         logger.info(`Export CSV: GET /api/export/csv?all=true`);
         logger.info(`Export JSON: GET /api/export/json?tag=<tag_name>`);
         logger.info(`Statistics: GET /api/stats`);

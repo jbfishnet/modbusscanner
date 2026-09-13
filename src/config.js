@@ -6,6 +6,12 @@ const yaml = require("js-yaml");
 const logger = require("./logger");
 
 const HTTP_PORT = process.env.PORT || 8080;
+// Loopback-only by default: this app has no auth, so binding to all
+// interfaces (the previous default, from omitting a host in .listen())
+// made the scanner and every configured Modbus target reachable by
+// anyone else on the LAN. Power users who want that (e.g. viewing the
+// dashboard from another device) can opt back in explicitly.
+const BIND_HOST = process.env.BIND_HOST || "127.0.0.1";
 
 // Modbus scanning
 const MODBUS_CONNECT_TIMEOUT_MS = 3000;
@@ -84,6 +90,7 @@ function getYamlRegisters() {
 
 module.exports = {
   HTTP_PORT,
+  BIND_HOST,
   MODBUS_CONNECT_TIMEOUT_MS,
   SCAN_STEP_DELAY_MS,
   MAX_BATCH_SIZE,
