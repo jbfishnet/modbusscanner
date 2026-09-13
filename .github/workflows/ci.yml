@@ -43,7 +43,7 @@ jobs:
     name: sonarqube
     needs: test
     if: ${{ vars.SONARQUBE_ENABLED == 'true' }}
-    runs-on: [self-hosted, linux, sonarqube]
+    runs-on: [self-hosted, linux]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
