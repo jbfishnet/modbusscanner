@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Modbus TCP Scanner</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
 <style>
   /* ── Reset & Base ─────────────────────────────────────────── */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -301,6 +302,23 @@
   .dashboard-canvas-wrap canvas {
     width: 100%; height: 100%; display: block;
   }
+  .dashboard-series-list {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px;
+  }
+  .dashboard-series-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(148,163,184,0.1); border: 1px solid rgba(148,163,184,0.2);
+    border-radius: 999px; padding: 4px 6px 4px 10px;
+    font-size: .72rem; color: #e2e8f0;
+  }
+  .dashboard-series-chip .swatch {
+    width: 8px; height: 8px; border-radius: 50%; flex: none;
+  }
+  .dashboard-series-chip button {
+    background: none; border: none; color: #94a3b8; cursor: pointer;
+    font-size: .85rem; line-height: 1; padding: 2px 4px; border-radius: 4px;
+  }
+  .dashboard-series-chip button:hover { color: #f87171; background: rgba(248,113,113,0.12); }
 
   /* ── Toast ────────────────────────────────────────────────── */
   #toast {
@@ -591,12 +609,13 @@
         <div class="dashboard-grid">
           <div class="dashboard-panel">
             <div class="dashboard-panel-header">
-              <div class="dashboard-panel-title">HP1 Flow Line Temperature</div>
-              <div class="dashboard-panel-unit">°C</div>
+              <div class="dashboard-panel-title">Live Metrics</div>
+              <div class="dashboard-panel-unit" id="dashboardSeriesCount">0 series</div>
             </div>
             <div class="dashboard-canvas-wrap">
               <canvas id="dashboardSeriesChart"></canvas>
             </div>
+            <div class="dashboard-series-list" id="dashboardSeriesList"></div>
           </div>
         </div>
       </div>
@@ -631,6 +650,8 @@ let scanRequest = null;
 let dashboardSeries = {};
 let dashboardTimer = null;
 let dashboardIntervalMs = 10000;
+let dashboardChart = null;
+const DASHBOARD_PALETTE = ["#60a5fa", "#22c55e", "#f59e0b", "#a78bfa", "#f472b6"];
 let startupYamlScanStarted = false;
 
 // ── Tab switching ──────────────────────────────────────────────────────────────
@@ -657,15 +678,24 @@ function switchTab(tab) {
   document.getElementById("discoverTableWrap").style.display = tab === "discover" ? "" : "none";
   document.getElementById("dashboardWrap").style.display     = tab === "dashboard" ? "" : "none";
 
-  const s = tab === "raw" ? rawStats : tab === "yaml" ? yamlStats : tab === "dashboard" ? { total: dashboardSeries.hp1FlowLineTemperature.length, ok: dashboardSeries.hp1FlowLineTemperature.length, warn: 0, err: 0 } : discoverStats;
+  // The dashboard tab has its own chart + series list, not the generic
+  // stats/export panel (it previously read a hardcoded, near-always-
+  // undefined dashboardSeries.hp1FlowLineTemperature key here, which threw
+  // as soon as this tab was opened without that exact tag added; export
+  // would otherwise have silently fallen through to exporting discoverRows).
+  if (tab === "dashboard") {
+    document.getElementById("statsRow").style.display = "none";
+    document.getElementById("btnExport").disabled = true;
+    renderDashboardChart();
+    renderDashboardSeriesList();
+    return;
+  }
+
+  const s = tab === "raw" ? rawStats : tab === "yaml" ? yamlStats : discoverStats;
   renderStats(s);
-  const rows = tab === "raw" ? rawRows : tab === "yaml" ? yamlRows : tab === "dashboard" ? dashboardSeries.hp1FlowLineTemperature : discoverRows;
+  const rows = tab === "raw" ? rawRows : tab === "yaml" ? yamlRows : discoverRows;
   document.getElementById("statsRow").style.display  = rows.length > 0 ? "" : "none";
   document.getElementById("btnExport").disabled      = rows.length === 0;
-
-  if (tab === "dashboard") {
-    renderDashboardChart();
-  }
 }
 
 // ── WebSocket ──────────────────────────────────────────────────────────────────
@@ -995,15 +1025,53 @@ function onRawResult(msg) {
   appendRawRow(row);
 }
 
-function addTagToDashboard(tagName) {
-  if (!tagName) return;
-  if (!dashboardSeries[tagName]) {
-    dashboardSeries[tagName] = { label: tagName.replace(/^EU\d+[A-Z]?_/, "").replace(/_/g, " "), points: [] };
-  }
+function addTagToDashboard(tagName, { persist = true } = {}) {
+  if (!tagName || dashboardSeries[tagName]) return;
+  dashboardSeries[tagName] = { label: tagName.replace(/^EU\d+[A-Z]?_/, "").replace(/_/g, " "), points: [] };
   if (activeTab !== "dashboard") {
     toast(`Added ${dashboardSeries[tagName].label} to the dashboard.`);
   }
   renderDashboardChart();
+  if (persist) persistDashboardConfig();
+}
+
+// Not debounced: add/remove are discrete, infrequent user actions (one
+// click each), not a rapid stream — debouncing here would only risk
+// losing the save if the page/app closes shortly after the click, for no
+// real benefit. Rehydration on load (addTagToDashboard with persist:
+// false) doesn't call this at all, so it doesn't cause redundant saves.
+async function persistDashboardConfig() {
+  try {
+    const response = await fetch("/api/dashboard-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tags: Object.keys(dashboardSeries) }),
+    });
+    if (!response.ok) throw new Error((await response.json()).error || "Save failed");
+  } catch (err) {
+    console.error("Failed to save dashboard config:", err.message);
+  }
+}
+
+// Only the chosen series (not their history) is persisted — the readings
+// table already retains history, and re-populating charts from it on
+// every load is a heavier feature than "remember which tags are pinned".
+async function loadDashboardConfig() {
+  try {
+    const response = await fetch("/api/dashboard-config");
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not load dashboard config");
+    (payload.tags || []).forEach((tagName) => addTagToDashboard(tagName, { persist: false }));
+  } catch (err) {
+    console.error("Could not load dashboard config:", err.message);
+  }
+}
+
+function removeTagFromDashboard(tagName) {
+  if (!dashboardSeries[tagName]) return;
+  delete dashboardSeries[tagName];
+  renderDashboardChart();
+  persistDashboardConfig();
 }
 
 function onYamlResult(msg) {
@@ -1297,88 +1365,82 @@ function clearDiscoverData() {
   renderStats(discoverStats);
 }
 
-function renderDashboardChart() {
+function ensureDashboardChart() {
+  if (dashboardChart) return dashboardChart;
   const canvas = document.getElementById("dashboardSeriesChart");
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  const seriesList = Object.values(dashboardSeries).filter((entry) => (entry.points || []).length > 0);
-  const width = canvas.clientWidth || 800;
-  const height = canvas.clientHeight || 280;
-  const ratio = window.devicePixelRatio || 1;
+  if (!canvas) return null;
 
-  canvas.width = width * ratio;
-  canvas.height = height * ratio;
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-
-  ctx.fillStyle = "#0f172a";
-  ctx.fillRect(0, 0, width, height);
-
-  const padding = { top: 18, right: 18, bottom: 28, left: 42 };
-  const plotWidth = width - padding.left - padding.right;
-  const plotHeight = height - padding.top - padding.bottom;
-
-  ctx.strokeStyle = "rgba(148, 163, 184, 0.2)";
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = padding.top + (plotHeight / 4) * i;
-    ctx.beginPath();
-    ctx.moveTo(padding.left, y);
-    ctx.lineTo(width - padding.right, y);
-    ctx.stroke();
-  }
-
-  if (!seriesList.length) {
-    ctx.fillStyle = "#94a3b8";
-    ctx.font = "13px sans-serif";
-    ctx.fillText("Add a YAML metric to the dashboard", padding.left + 8, height / 2);
-    return;
-  }
-
-  const allValues = seriesList.flatMap((series) => series.points.map((point) => point.value).filter((value) => value !== null && Number.isFinite(value)));
-  if (!allValues.length) {
-    ctx.fillStyle = "#94a3b8";
-    ctx.font = "13px sans-serif";
-    ctx.fillText("Waiting for live values…", padding.left + 8, height / 2);
-    return;
-  }
-
-  const minValue = Math.min(...allValues);
-  const maxValue = Math.max(...allValues);
-  const range = maxValue - minValue || 1;
-  const palette = ["#60a5fa", "#22c55e", "#f59e0b", "#a78bfa", "#f472b6" ];
-
-  seriesList.forEach((series, seriesIndex) => {
-    const points = series.points.filter((point) => point.value !== null && Number.isFinite(point.value));
-    if (!points.length) return;
-
-    ctx.strokeStyle = palette[seriesIndex % palette.length];
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    points.forEach((point, index) => {
-      const x = padding.left + (index / Math.max(points.length - 1, 1)) * plotWidth;
-      const y = padding.top + plotHeight - ((Number(point.value) - minValue) / range) * plotHeight;
-      if (index === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
-
-    const lastValue = points[points.length - 1].value;
-    ctx.fillStyle = palette[seriesIndex % palette.length];
-    ctx.font = "12px sans-serif";
-    ctx.fillText(`${series.label}: ${Number(lastValue).toFixed(1)}°`, padding.left + 10 + (seriesIndex * 90), padding.top + 14 + (seriesIndex % 2) * 12);
+  dashboardChart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { datasets: [] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      parsing: false,
+      scales: {
+        x: { type: "category", ticks: { color: "#94a3b8", maxRotation: 0 }, grid: { color: "rgba(148,163,184,0.15)" } },
+        y: { ticks: { color: "#94a3b8" }, grid: { color: "rgba(148,163,184,0.15)" } },
+      },
+      plugins: {
+        legend: { labels: { color: "#e2e8f0" } },
+      },
+    },
   });
-
-  ctx.fillStyle = "#94a3b8";
-  ctx.font = "11px sans-serif";
-  ctx.fillText(`${minValue.toFixed(1)}°`, padding.left - 6, height - padding.bottom + 4);
-  ctx.fillText(`${maxValue.toFixed(1)}°`, padding.left - 6, padding.top + 8);
+  return dashboardChart;
 }
+
+function renderDashboardChart() {
+  const chart = ensureDashboardChart();
+  if (!chart) return;
+
+  const seriesEntries = Object.entries(dashboardSeries).filter(([, entry]) => (entry.points || []).length > 0);
+
+  chart.data.datasets = seriesEntries.map(([tagName, series], index) => ({
+    label: series.label,
+    tagName,
+    borderColor: DASHBOARD_PALETTE[index % DASHBOARD_PALETTE.length],
+    backgroundColor: DASHBOARD_PALETTE[index % DASHBOARD_PALETTE.length],
+    borderWidth: 2,
+    pointRadius: 0,
+    tension: 0.15,
+    data: series.points
+      .filter((point) => point.value !== null && Number.isFinite(point.value))
+      .map((point) => ({ x: point.time, y: Number(point.value) })),
+  }));
+
+  chart.update("none");
+  renderDashboardSeriesList();
+}
+
+function renderDashboardSeriesList() {
+  const list = document.getElementById("dashboardSeriesList");
+  const count = document.getElementById("dashboardSeriesCount");
+  if (!list) return;
+
+  const tagNames = Object.keys(dashboardSeries);
+  if (count) count.textContent = `${tagNames.length} series`;
+
+  list.innerHTML = "";
+  tagNames.forEach((tagName, index) => {
+    const chip = document.createElement("div");
+    chip.className = "dashboard-series-chip";
+    chip.innerHTML = `
+      <span class="swatch" style="background:${DASHBOARD_PALETTE[index % DASHBOARD_PALETTE.length]}"></span>
+      <span>${esc(dashboardSeries[tagName].label)}</span>
+      <button type="button" title="Remove" aria-label="Remove ${esc(dashboardSeries[tagName].label)} from dashboard">×</button>
+    `;
+    chip.querySelector("button").addEventListener("click", () => removeTagFromDashboard(tagName));
+    list.appendChild(chip);
+  });
+}
+
+const MIN_DASHBOARD_INTERVAL_SEC = 2;
 
 function applyDashboardInterval() {
   const value = Number(document.getElementById("dashboardIntervalSec").value);
-  if (!Number.isFinite(value) || value <= 0) {
-    toast("Dashboard interval must be a positive number of seconds.", true);
+  if (!Number.isFinite(value) || value < MIN_DASHBOARD_INTERVAL_SEC) {
+    toast(`Dashboard interval must be at least ${MIN_DASHBOARD_INTERVAL_SEC} seconds.`, true);
     return;
   }
 
@@ -1444,7 +1506,13 @@ document.getElementById("btnDashboardRefresh").addEventListener("click", () => {
   if (scanTargets.length > 0) startQueuedScan("scan_yaml", {}, null);
   else toast("Add a scan target before refreshing the dashboard.", true);
 });
-window.addEventListener("resize", renderDashboardChart);
+// Chart.js's own responsive:true handles resizing; a manual redraw here
+// is unnecessary. Do stop the polling interval on unload, though — mostly
+// moot in a plain browser tab, but matters once this runs inside an
+// Electron window that can be closed without a full page navigation.
+window.addEventListener("beforeunload", () => {
+  if (dashboardTimer) clearInterval(dashboardTimer);
+});
 startDashboardCollection();
 
 // ── Custom sanity check (raw tab) ──────────────────────────────────────────────
@@ -1480,6 +1548,7 @@ function revalidateRawTable() {
 // ── Auto-connect ───────────────────────────────────────────────────────────────
 connect();
 loadScanTargets();
+loadDashboardConfig();
 </script>
 </body>
 </html>

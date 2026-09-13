@@ -214,6 +214,110 @@ test('startup YAML scan stays silent and dashboard add button sits in the sanity
   }
 });
 
+test('dashboard tab renders without error from a fresh state, and persists chosen series across reload', async ({ browser }) => {
+  if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+
+  const uiServer = spawn(process.execPath, ['server-with-persistence.js'], {
+    cwd: root,
+    env: { ...process.env, PORT: String(uiPort), DB_PATH: dbPath },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  const modbusServer = spawn(process.execPath, ['server.js'], {
+    cwd: path.join(root, 'testserver'),
+    env: { ...process.env, MODBUS_PORT: String(modbusPort), UPDATE_INTERVAL: '1000' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  try {
+    await Promise.all([
+      waitForOutput(uiServer, `localhost:${uiPort}`),
+      waitForOutput(modbusServer, 'ready'),
+    ]);
+
+    const page = await browser.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (err) => pageErrors.push(err));
+
+    await page.goto(`http://127.0.0.1:${uiPort}`);
+
+    // Regression: the dashboard tab used to read a hardcoded, near-always-
+    // undefined series key on first open and throw immediately.
+    await page.locator('#tabDashboard').click();
+    await expect(page.locator('#dashboardWrap')).toBeVisible();
+    await expect(page.locator('#dashboardSeriesChart')).toBeVisible();
+    await expect(page.locator('#dashboardSeriesCount')).toHaveText('0 series');
+    expect(pageErrors).toEqual([]);
+
+    // Push the auto-refresh interval way out so the periodic background
+    // scan (which sets `scanning = true` and blocks tab switching while
+    // it runs) can't fire mid-test once a target + series are configured.
+    await page.locator('#dashboardIntervalSec').fill('3600');
+    await page.locator('#btnApplyDashboardInterval').click();
+
+    // Add a tag to the dashboard from the YAML table, then confirm it
+    // shows up as a chart series + chip.
+    await page.locator('#targetIp').fill('127.0.0.1');
+    await page.locator('#targetPort').fill(String(modbusPort));
+    await page.locator('#targetUnitId').fill('1');
+    await page.locator('#btnSaveTargets').click();
+    await expect(page.locator('#targetList .target-row')).toContainText('127.0.0.1');
+
+    await page.locator('#tabYaml').click();
+    await page.locator('#btnScanYaml').click();
+    await expect(page.locator('#yamlBody tr:not(.section-header)')).toHaveCount(1, { timeout: 40000 });
+
+    const [addSaveResponse] = await Promise.all([
+      page.waitForResponse((res) => res.url().endsWith('/api/dashboard-config') && res.request().method() === 'POST'),
+      page.locator('.dashboard-add-btn').first().click(),
+    ]);
+    expect(addSaveResponse.ok()).toBe(true);
+
+    await page.locator('#tabDashboard').click();
+    await expect(page.locator('#dashboardSeriesCount')).toHaveText('1 series');
+    await expect(page.locator('.dashboard-series-chip')).toHaveCount(1);
+    expect(pageErrors).toEqual([]);
+
+    // Reload: the chosen series should survive (server-side persistence),
+    // even though its collected data points do not. On reload, a saved
+    // target + loaded YAML config auto-starts a silent scan (existing
+    // behavior — see the "startup YAML scan stays silent" test above),
+    // which sets `scanning = true` and blocks tab switching until it
+    // finishes; wait it out before interacting with the dashboard tab.
+    await page.reload();
+    // Wait for the auto-scan to both start and finish, not just "not
+    // scanning right now" — right after reload, before it has kicked in,
+    // `scanning` is also (transiently) false.
+    await page.waitForFunction(() => startupYamlScanStarted && scanning === false, null, { timeout: 30000 });
+    await page.locator('#tabDashboard').click();
+    await expect(page.locator('#dashboardSeriesCount')).toHaveText('1 series');
+    await expect(page.locator('.dashboard-series-chip')).toHaveCount(1);
+    await page.locator('#dashboardIntervalSec').fill('3600');
+    await page.locator('#btnApplyDashboardInterval').click();
+
+    // Remove it via the chip's remove button; confirm it's gone and stays
+    // gone after another reload.
+    const [removeSaveResponse] = await Promise.all([
+      page.waitForResponse((res) => res.url().endsWith('/api/dashboard-config') && res.request().method() === 'POST'),
+      page.locator('.dashboard-series-chip button').click(),
+    ]);
+    expect(removeSaveResponse.ok()).toBe(true);
+    await expect(page.locator('#dashboardSeriesCount')).toHaveText('0 series');
+
+    await page.reload();
+    await page.waitForFunction(() => startupYamlScanStarted && scanning === false, null, { timeout: 30000 });
+    await page.locator('#tabDashboard').click();
+    await expect(page.locator('#dashboardSeriesCount')).toHaveText('0 series');
+    expect(pageErrors).toEqual([]);
+
+    await page.close();
+  } finally {
+    await stopProcess(modbusServer);
+    await stopProcess(uiServer);
+    if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+  }
+});
+
 test('UI flow works for target setup, raw scan, YAML scan, discovery, export, and clear', async ({ browser }) => {
   if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
 

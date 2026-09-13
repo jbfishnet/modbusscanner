@@ -11,6 +11,19 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function serveIndex(req, res) {
+  const filePath = path.join(__dirname, "..", "index.html");
+  fs.readFile(filePath, (err, data) => {
+    if (err) {
+      res.writeHead(404);
+      res.end("index.html not found");
+    } else {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(data);
+    }
+  });
+}
+
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let body = "";
@@ -163,40 +176,53 @@ function createHttpHandler({ dataStore }) {
     }
   }
 
+  async function handleGetDashboardConfig(res) {
+    try {
+      sendJson(res, 200, { tags: await dataStore.getDashboardConfig() });
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+  }
+
+  async function handleSaveDashboardConfig(req, res) {
+    try {
+      const payload = await readJsonBody(req);
+      if (!Array.isArray(payload.tags)) {
+        throw new Error("tags must be an array of tag names");
+      }
+      const tags = await dataStore.saveDashboardConfig(payload.tags);
+      sendJson(res, 200, { tags });
+    } catch (err) {
+      sendJson(res, 400, { error: err.message });
+    }
+  }
+
+  const routes = [
+    { method: "GET", path: "/", handle: serveIndex },
+    { method: "GET", path: "/index.html", handle: serveIndex },
+    { method: "GET", path: "/api/export/csv", handle: (req, res, url) => handleExportCSV(url, res) },
+    { method: "GET", path: "/api/export/json", handle: (req, res, url) => handleExportJSON(url, res) },
+    { method: "GET", path: "/api/stats", handle: (req, res) => handleStats(res) },
+    { method: "GET", path: "/api/tags", handle: (req, res) => handleTags(res) },
+    { method: "GET", path: "/api/readings/latest", handle: (req, res) => handleLatestReadings(res) },
+    { method: "GET", path: "/api/bootstrap", handle: (req, res) => handleBootstrap(res) },
+    { method: "GET", path: "/api/scan-targets", handle: (req, res) => handleGetScanTargets(res) },
+    { method: "POST", path: "/api/scan-targets", handle: handleSaveScanTargets },
+    { method: "GET", path: "/api/dashboard-config", handle: (req, res) => handleGetDashboardConfig(res) },
+    { method: "POST", path: "/api/dashboard-config", handle: handleSaveDashboardConfig },
+  ];
+
   return function handleRequest(req, res) {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    const route = routes.find((r) => r.method === req.method && r.path === url.pathname);
 
-    if (url.pathname === "/" || url.pathname === "/index.html") {
-      const filePath = path.join(__dirname, "..", "index.html");
-      fs.readFile(filePath, (err, data) => {
-        if (err) {
-          res.writeHead(404);
-          res.end("index.html not found");
-        } else {
-          res.writeHead(200, { "Content-Type": "text/html" });
-          res.end(data);
-        }
-      });
-    } else if (url.pathname === "/api/export/csv") {
-      handleExportCSV(url, res);
-    } else if (url.pathname === "/api/export/json") {
-      handleExportJSON(url, res);
-    } else if (url.pathname === "/api/stats") {
-      handleStats(res);
-    } else if (url.pathname === "/api/tags") {
-      handleTags(res);
-    } else if (url.pathname === "/api/readings/latest") {
-      handleLatestReadings(res);
-    } else if (url.pathname === "/api/bootstrap" && req.method === "GET") {
-      handleBootstrap(res);
-    } else if (url.pathname === "/api/scan-targets" && req.method === "GET") {
-      handleGetScanTargets(res);
-    } else if (url.pathname === "/api/scan-targets" && req.method === "POST") {
-      handleSaveScanTargets(req, res);
-    } else {
+    if (!route) {
       res.writeHead(404);
       res.end("Not found");
+      return;
     }
+
+    route.handle(req, res, url);
   };
 }
 

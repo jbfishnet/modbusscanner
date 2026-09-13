@@ -224,6 +224,61 @@ class DataStore {
   }
 
   /**
+   * Generic key/value settings accessors (settings table).
+   */
+  getSetting(key) {
+    return new Promise((resolve, reject) => {
+      if (!this.initialized) {
+        reject(new Error("DataStore not initialized"));
+        return;
+      }
+      this.db.get(`SELECT value FROM settings WHERE key = ?`, [key], (err, row) => {
+        if (err) reject(err);
+        else resolve(row ? row.value : null);
+      });
+    });
+  }
+
+  setSetting(key, value) {
+    return new Promise((resolve, reject) => {
+      if (!this.initialized) {
+        reject(new Error("DataStore not initialized"));
+        return;
+      }
+      this.db.run(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        [key, value],
+        (err) => {
+          if (err) reject(err);
+          else resolve();
+        }
+      );
+    });
+  }
+
+  /**
+   * Dashboard chart config: just the list of tag names the user has added
+   * (not their history — the readings table already retains that).
+   */
+  async getDashboardConfig() {
+    const raw = await this.getSetting("dashboard_tags");
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((t) => typeof t === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async saveDashboardConfig(tagNames) {
+    const clean = Array.isArray(tagNames) ? tagNames.filter((t) => typeof t === "string") : [];
+    await this.setSetting("dashboard_tags", JSON.stringify(clean));
+    return clean;
+  }
+
+  /**
    * Record a scan metadata entry
    */
   recordScanStart(scanId, ip, port, unitId, scanType) {
