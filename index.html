@@ -240,6 +240,67 @@
   .pill-coil     { background: rgba(34,197,94,.12);   color: #4ade80; border: 1px solid rgba(34,197,94,.25); }
   .pill-discrete { background: rgba(245,158,11,.12);  color: #fbbf24; border: 1px solid rgba(245,158,11,.25); }
   .discover-phase { font-size: .72rem; color: var(--muted); font-style: italic; }
+  .dashboard-add-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; padding: 0; margin-left: auto;
+    background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.25);
+    color: #bfdbfe; border-radius: 6px; font-size: 1rem; line-height: 1; font-weight: 700;
+    cursor: pointer; box-sizing: border-box;
+  }
+  .dashboard-add-btn:hover { filter: brightness(1.1); }
+
+  /* ── Dashboard ─────────────────────────────────────────────── */
+  #dashboardWrap {
+    background: linear-gradient(180deg, #0f172a 0%, #111827 100%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+  }
+  .dashboard-shell {
+    padding: 18px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .dashboard-header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(148,163,184,0.2);
+  }
+  .dashboard-title {
+    font-size: .8rem; text-transform: uppercase; letter-spacing: 1.4px;
+    color: #94a3b8; font-weight: 700;
+  }
+  .dashboard-meta {
+    color: #cbd5e1; font-size: .72rem;
+  }
+  .dashboard-grid {
+    display: grid; grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .dashboard-panel {
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid rgba(148,163,184,0.2);
+    border-radius: 12px;
+    padding: 14px 14px 10px;
+  }
+  .dashboard-panel-header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin-bottom: 10px;
+  }
+  .dashboard-panel-title {
+    font-size: .82rem; font-weight: 700; color: #e2e8f0;
+  }
+  .dashboard-panel-unit {
+    font-size: .72rem; color: #93c5fd; background: rgba(59,130,246,0.1);
+    border: 1px solid rgba(59,130,246,0.2); border-radius: 999px; padding: 4px 8px;
+  }
+  .dashboard-canvas-wrap {
+    position: relative; height: 280px; width: 100%;
+    background: radial-gradient(circle at top, rgba(59,130,246,0.08), rgba(15,23,42,0.2));
+    border-radius: 10px; overflow: hidden;
+    border: 1px solid rgba(148,163,184,0.12);
+  }
+  .dashboard-canvas-wrap canvas {
+    width: 100%; height: 100%; display: block;
+  }
 
   /* ── Toast ────────────────────────────────────────────────── */
   #toast {
@@ -287,6 +348,7 @@
   <button class="tab-btn active" id="tabRaw"      onclick="switchTab('raw')">🔬&nbsp; Raw Scan</button>
   <button class="tab-btn"        id="tabYaml"     onclick="switchTab('yaml')">📋&nbsp; YAML Registers</button>
   <button class="tab-btn"        id="tabDiscover" onclick="switchTab('discover')">🌐&nbsp; Discover All</button>
+  <button class="tab-btn"        id="tabDashboard" onclick="switchTab('dashboard')">📊&nbsp; Dashboard</button>
 </div>
 
 <!-- ── Main layout ───────────────────────────────────────────────────────── -->
@@ -511,6 +573,35 @@
       </table>
     </div>
 
+    <!-- Dashboard tab -->
+    <div class="table-wrap" id="dashboardWrap" style="display:none;">
+      <div class="dashboard-shell">
+        <div class="dashboard-header">
+          <div class="dashboard-title">Plant Overview</div>
+          <div class="dashboard-meta">Local monitoring dashboard</div>
+        </div>
+        <div class="dashboard-controls" style="display:flex; align-items:end; gap:12px; flex-wrap:wrap;">
+          <div class="field" style="margin:0; min-width:150px;">
+            <label for="dashboardIntervalSec">Sample every (sec)</label>
+            <input id="dashboardIntervalSec" type="number" min="1" max="3600" value="10" />
+          </div>
+          <button id="btnApplyDashboardInterval" class="btn-ghost" type="button">Apply</button>
+          <button id="btnDashboardRefresh" class="btn-primary" type="button" style="width:auto;">Refresh now</button>
+        </div>
+        <div class="dashboard-grid">
+          <div class="dashboard-panel">
+            <div class="dashboard-panel-header">
+              <div class="dashboard-panel-title">HP1 Flow Line Temperature</div>
+              <div class="dashboard-panel-unit">°C</div>
+            </div>
+            <div class="dashboard-canvas-wrap">
+              <canvas id="dashboardSeriesChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </section>
 </main>
 
@@ -537,6 +628,10 @@ let yamlRegCount = 0;
 let scanTargets = [];
 let scanQueue = [];
 let scanRequest = null;
+let dashboardSeries = {};
+let dashboardTimer = null;
+let dashboardIntervalMs = 10000;
+let startupYamlScanStarted = false;
 
 // ── Tab switching ──────────────────────────────────────────────────────────────
 function switchTab(tab) {
@@ -546,6 +641,7 @@ function switchTab(tab) {
   document.getElementById("tabRaw").classList.toggle("active",      tab === "raw");
   document.getElementById("tabYaml").classList.toggle("active",     tab === "yaml");
   document.getElementById("tabDiscover").classList.toggle("active", tab === "discover");
+  document.getElementById("tabDashboard").classList.toggle("active", tab === "dashboard");
 
   document.getElementById("rawParamsCard").style.display     = tab === "raw"      ? "" : "none";
   document.getElementById("rawSanityCard").style.display     = tab === "raw"      ? "" : "none";
@@ -559,12 +655,17 @@ function switchTab(tab) {
   document.getElementById("rawTableWrap").style.display      = tab === "raw"      ? "" : "none";
   document.getElementById("yamlTableWrap").style.display     = tab === "yaml"     ? "" : "none";
   document.getElementById("discoverTableWrap").style.display = tab === "discover" ? "" : "none";
+  document.getElementById("dashboardWrap").style.display     = tab === "dashboard" ? "" : "none";
 
-  const s = tab === "raw" ? rawStats : tab === "yaml" ? yamlStats : discoverStats;
+  const s = tab === "raw" ? rawStats : tab === "yaml" ? yamlStats : tab === "dashboard" ? { total: dashboardSeries.hp1FlowLineTemperature.length, ok: dashboardSeries.hp1FlowLineTemperature.length, warn: 0, err: 0 } : discoverStats;
   renderStats(s);
-  const rows = tab === "raw" ? rawRows : tab === "yaml" ? yamlRows : discoverRows;
+  const rows = tab === "raw" ? rawRows : tab === "yaml" ? yamlRows : tab === "dashboard" ? dashboardSeries.hp1FlowLineTemperature : discoverRows;
   document.getElementById("statsRow").style.display  = rows.length > 0 ? "" : "none";
   document.getElementById("btnExport").disabled      = rows.length === 0;
+
+  if (tab === "dashboard") {
+    renderDashboardChart();
+  }
 }
 
 // ── WebSocket ──────────────────────────────────────────────────────────────────
@@ -608,18 +709,52 @@ function handleMsg(msg) {
 function onConfig(msg) {
   yamlRegCount = (msg.registers || []).length;
   document.getElementById("yamlRegCount").textContent = yamlRegCount;
+
+  if (!startupYamlScanStarted && scanTargets.length > 0 && yamlRegCount > 0) {
+    startupYamlScanStarted = true;
+    void startYamlScan(true);
+  }
 }
 
 async function loadScanTargets() {
   try {
-    const response = await fetch("/api/scan-targets");
-    const payload = await response.json();
+    let response = await fetch("/api/bootstrap");
+    let payload = await response.json();
+
+    if (!response.ok) {
+      response = await fetch("/api/scan-targets");
+      payload = await response.json();
+    }
     if (!response.ok) throw new Error(payload.error || "Could not load scan targets");
+
     scanTargets = payload.targets || [];
     renderScanTargets();
+
+    if (!startupYamlScanStarted && scanTargets.length > 0 && yamlRegCount > 0) {
+      startupYamlScanStarted = true;
+      await startYamlScan(true);
+    }
   } catch (err) {
     toast("Could not load scan targets: " + err.message, true);
   }
+}
+
+function getDraftTarget() {
+  const ip = document.getElementById("targetIp").value.trim();
+  if (!ip) return null;
+  return {
+    ip,
+    port: Number(document.getElementById("targetPort").value),
+    unitId: Number(document.getElementById("targetUnitId").value),
+  };
+}
+
+function hasEquivalentTarget(target) {
+  return scanTargets.some((saved) =>
+    saved.ip === target.ip &&
+    Number(saved.port) === Number(target.port) &&
+    Number(saved.unitId) === Number(target.unitId)
+  );
 }
 
 function renderScanTargets() {
@@ -646,18 +781,22 @@ function renderScanTargets() {
   }
 
   const hasTargets = scanTargets.length > 0;
+  const hasDraft = !!getDraftTarget();
   ["btnScan", "btnScanYaml", "btnScanDiscover"].forEach((id) => {
-    document.getElementById(id).disabled = !hasTargets || scanning;
+    document.getElementById(id).disabled = (!hasTargets && !hasDraft) || scanning;
   });
 }
 
-async function saveScanTargets() {
-  const ip = document.getElementById("targetIp").value.trim();
-  const port = Number(document.getElementById("targetPort").value);
-  const unitId = Number(document.getElementById("targetUnitId").value);
-  if (!ip) { toast("Enter an IP address before saving.", true); return; }
+async function persistDraftTarget() {
+  const draft = getDraftTarget();
+  if (!draft) return false;
+  if (hasEquivalentTarget(draft)) {
+    document.getElementById("targetIp").value = "";
+    renderScanTargets();
+    return true;
+  }
 
-  const nextTargets = [...scanTargets, { ip, port, unitId }];
+  const nextTargets = [...scanTargets, draft];
   try {
     const response = await fetch("/api/scan-targets", {
       method: "POST",
@@ -666,17 +805,31 @@ async function saveScanTargets() {
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not save scan target");
+
     scanTargets = payload.targets || [];
     document.getElementById("targetIp").value = "";
     renderScanTargets();
+
     const saved = scanTargets[scanTargets.length - 1];
     toast(saved.lastStatus === "reachable"
       ? `${saved.ip} is reachable and saved.`
       : `${saved.ip} saved, but access failed: ${saved.lastError}`,
       saved.lastStatus !== "reachable");
+    return true;
   } catch (err) {
     toast("Could not save target: " + err.message, true);
+    return false;
   }
+}
+
+async function saveScanTargets() {
+  const draft = getDraftTarget();
+  if (!draft) {
+    toast("Enter an IP address before saving.", true);
+    return;
+  }
+
+  await persistDraftTarget();
 }
 
 async function removeScanTarget(index) {
@@ -711,11 +864,11 @@ async function startScan() {
   await startQueuedScan("scan", { regType, startReg, count, batchSize }, clearRawData);
 }
 
-async function startYamlScan() {
+async function startYamlScan(silent = false) {
   if (scanning) return;
   if (yamlRegCount === 0) { toast("No YAML registers loaded. Ensure modbus.yaml is present on the server.", true); return; }
 
-  await startQueuedScan("scan_yaml", {}, clearYamlData);
+  await startQueuedScan("scan_yaml", {}, clearYamlData, silent);
 }
 
 async function startDiscover() {
@@ -724,32 +877,39 @@ async function startDiscover() {
   await startQueuedScan("scan_discover", {}, clearDiscoverData);
 }
 
-async function startQueuedScan(type, options, clearData) {
-  if (scanTargets.length === 0) {
+async function startQueuedScan(type, options, clearData, silent = false) {
+  const draft = getDraftTarget();
+  if (scanTargets.length === 0 && !draft) {
     toast("Add at least one scan target first.", true);
     return;
   }
+
+  if (draft) {
+    const persisted = await persistDraftTarget();
+    if (!persisted) return;
+  }
+
   try { await ensureWs(); }
   catch (err) { toast("Cannot connect to scanner server: " + err.message, true); return; }
 
-  clearData();
+  if (typeof clearData === "function") clearData();
   scanQueue = [...scanTargets];
-  scanRequest = { type, options };
-  beginScan();
+  scanRequest = { type, options, silent };
+  beginScan(silent);
 }
 
-function beginScan() {
+function beginScan(silent = false) {
   scanning = true;
   scanId = Date.now().toString();
 
   document.getElementById("btnScan").disabled          = true;
   document.getElementById("btnScanYaml").disabled      = true;
   document.getElementById("btnScanDiscover").disabled  = true;
-  document.getElementById("btnCancel").disabled        = false;
-  document.getElementById("progressCard").style.display = "";
-  document.getElementById("statsRow").style.display     = "";
+  document.getElementById("btnCancel").disabled        = !silent ? false : true;
+  document.getElementById("progressCard").style.display = silent ? "none" : "";
+  document.getElementById("statsRow").style.display     = silent ? "none" : "";
   document.getElementById("btnExport").disabled   = true;
-  setStatus("scanning");
+  if (!silent) setStatus("scanning");
   sendNextTarget();
 }
 
@@ -778,12 +938,13 @@ function sendNextTarget() {
 
 function finishTarget(withError) {
   if (!scanning) return;
-  if (withError) setStatus("error");
+  const silent = !!(scanRequest && scanRequest.silent);
+  if (withError && !silent) setStatus("error");
   if (scanQueue.length > 0) {
-    if (withError) toast(`Target failed. Continuing with the next target.`, true);
+    if (withError && !silent) toast(`Target failed. Continuing with the next target.`, true);
     sendNextTarget();
   } else {
-    endScan(withError);
+    endScan(withError, silent);
   }
 }
 
@@ -792,18 +953,19 @@ function cancelScan() {
   ws.send(JSON.stringify({ type: "cancel", id: scanId }));
 }
 
-function endScan(withError) {
+function endScan(withError, silent = false) {
   scanning = false;
   document.getElementById("btnScan").disabled          = false;
   document.getElementById("btnScanYaml").disabled      = false;
   document.getElementById("btnScanDiscover").disabled  = false;
   document.getElementById("btnCancel").disabled        = true;
   document.getElementById("progressPhase").style.display = "none";
+  document.getElementById("progressCard").style.display = silent ? "none" : "";
   const rows = activeTab === "raw" ? rawRows : activeTab === "yaml" ? yamlRows : discoverRows;
   document.getElementById("btnExport").disabled = rows.length === 0;
   renderScanTargets();
-  setStatus(withError ? "error" : "connected");
-  if (!withError) toast(`Scan complete — ${rows.length} registers found.`);
+  if (!silent) setStatus(withError ? "error" : "connected");
+  if (!withError && !silent) toast(`Scan complete — ${rows.length} registers found.`);
 }
 
 // ── Result rendering ───────────────────────────────────────────────────────────
@@ -833,10 +995,30 @@ function onRawResult(msg) {
   appendRawRow(row);
 }
 
+function addTagToDashboard(tagName) {
+  if (!tagName) return;
+  if (!dashboardSeries[tagName]) {
+    dashboardSeries[tagName] = { label: tagName.replace(/^EU\d+[A-Z]?_/, "").replace(/_/g, " "), points: [] };
+  }
+  if (activeTab !== "dashboard") {
+    toast(`Added ${dashboardSeries[tagName].label} to the dashboard.`);
+  }
+  renderDashboardChart();
+}
+
 function onYamlResult(msg) {
   const { register, name, section, scaledValue, unit, dataType, sanity } = msg;
   const row = { register, name, section, scaledValue, unit, dataType, sanity };
   yamlRows.push(row);
+
+  if (name && dashboardSeries[name]) {
+    const sample = Number.isFinite(Number(scaledValue)) ? Number(scaledValue) : null;
+    dashboardSeries[name].points.push({ time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }), value: sample });
+    if (dashboardSeries[name].points.length > 120) {
+      dashboardSeries[name].points = dashboardSeries[name].points.slice(-120);
+    }
+    renderDashboardChart();
+  }
 
   yamlStats.total++;
   if (sanity.status === "ok")        yamlStats.ok++;
@@ -909,8 +1091,15 @@ function appendYamlRow(row) {
     <td class="scaled-val">${esc(displayVal)}</td>
     <td class="unit">${esc(unit || "—")}</td>
     <td class="dtype">${esc(dataType || "—")}</td>
-    <td>${badgeHtml(sanity)}</td>
+    <td class="sanity-cell" style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+      ${badgeHtml(sanity)}
+      <button class="dashboard-add-btn" type="button" data-name="${esc(name)}" title="Add to dashboard" aria-label="Add ${esc(shortName)} to dashboard">+</button>
+    </td>
   `;
+  const addButton = tr.querySelector(".dashboard-add-btn");
+  if (addButton) {
+    addButton.addEventListener("click", () => addTagToDashboard(name));
+  }
   body.appendChild(tr);
 }
 
@@ -1108,6 +1297,111 @@ function clearDiscoverData() {
   renderStats(discoverStats);
 }
 
+function renderDashboardChart() {
+  const canvas = document.getElementById("dashboardSeriesChart");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const seriesList = Object.values(dashboardSeries).filter((entry) => (entry.points || []).length > 0);
+  const width = canvas.clientWidth || 800;
+  const height = canvas.clientHeight || 280;
+  const ratio = window.devicePixelRatio || 1;
+
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  ctx.fillStyle = "#0f172a";
+  ctx.fillRect(0, 0, width, height);
+
+  const padding = { top: 18, right: 18, bottom: 28, left: 42 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.2)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padding.top + (plotHeight / 4) * i;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(width - padding.right, y);
+    ctx.stroke();
+  }
+
+  if (!seriesList.length) {
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "13px sans-serif";
+    ctx.fillText("Add a YAML metric to the dashboard", padding.left + 8, height / 2);
+    return;
+  }
+
+  const allValues = seriesList.flatMap((series) => series.points.map((point) => point.value).filter((value) => value !== null && Number.isFinite(value)));
+  if (!allValues.length) {
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "13px sans-serif";
+    ctx.fillText("Waiting for live values…", padding.left + 8, height / 2);
+    return;
+  }
+
+  const minValue = Math.min(...allValues);
+  const maxValue = Math.max(...allValues);
+  const range = maxValue - minValue || 1;
+  const palette = ["#60a5fa", "#22c55e", "#f59e0b", "#a78bfa", "#f472b6" ];
+
+  seriesList.forEach((series, seriesIndex) => {
+    const points = series.points.filter((point) => point.value !== null && Number.isFinite(point.value));
+    if (!points.length) return;
+
+    ctx.strokeStyle = palette[seriesIndex % palette.length];
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    points.forEach((point, index) => {
+      const x = padding.left + (index / Math.max(points.length - 1, 1)) * plotWidth;
+      const y = padding.top + plotHeight - ((Number(point.value) - minValue) / range) * plotHeight;
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    const lastValue = points[points.length - 1].value;
+    ctx.fillStyle = palette[seriesIndex % palette.length];
+    ctx.font = "12px sans-serif";
+    ctx.fillText(`${series.label}: ${Number(lastValue).toFixed(1)}°`, padding.left + 10 + (seriesIndex * 90), padding.top + 14 + (seriesIndex % 2) * 12);
+  });
+
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "11px sans-serif";
+  ctx.fillText(`${minValue.toFixed(1)}°`, padding.left - 6, height - padding.bottom + 4);
+  ctx.fillText(`${maxValue.toFixed(1)}°`, padding.left - 6, padding.top + 8);
+}
+
+function applyDashboardInterval() {
+  const value = Number(document.getElementById("dashboardIntervalSec").value);
+  if (!Number.isFinite(value) || value <= 0) {
+    toast("Dashboard interval must be a positive number of seconds.", true);
+    return;
+  }
+
+  dashboardIntervalMs = value * 1000;
+  startDashboardCollection();
+  toast(`Dashboard refresh interval set to ${value} seconds.`);
+}
+
+function startDashboardCollection() {
+  if (dashboardTimer) {
+    clearInterval(dashboardTimer);
+    dashboardTimer = null;
+  }
+
+  if (dashboardIntervalMs > 0) {
+    dashboardTimer = setInterval(() => {
+      if (scanTargets.length > 0 && !scanning && Object.keys(dashboardSeries).length > 0) {
+        startQueuedScan("scan_yaml", {}, null);
+      }
+    }, dashboardIntervalMs);
+  }
+}
+
 function renderStats(s) {
   document.getElementById("statTotal").textContent = s.total;
   document.getElementById("statOk").textContent    = s.ok;
@@ -1136,11 +1430,22 @@ function toast(msg, isErr = false) {
 }
 
 // ── Wire buttons ───────────────────────────────────────────────────────────────
+document.getElementById("targetIp").addEventListener("input", renderScanTargets);
+document.getElementById("targetPort").addEventListener("input", renderScanTargets);
+document.getElementById("targetUnitId").addEventListener("input", renderScanTargets);
+
 document.getElementById("btnScan").addEventListener("click", startScan);
 document.getElementById("btnScanYaml").addEventListener("click", startYamlScan);
 document.getElementById("btnScanDiscover").addEventListener("click", startDiscover);
 document.getElementById("btnCancel").addEventListener("click", cancelScan);
 document.getElementById("btnSaveTargets").addEventListener("click", saveScanTargets);
+document.getElementById("btnApplyDashboardInterval").addEventListener("click", applyDashboardInterval);
+document.getElementById("btnDashboardRefresh").addEventListener("click", () => {
+  if (scanTargets.length > 0) startQueuedScan("scan_yaml", {}, null);
+  else toast("Add a scan target before refreshing the dashboard.", true);
+});
+window.addEventListener("resize", renderDashboardChart);
+startDashboardCollection();
 
 // ── Custom sanity check (raw tab) ──────────────────────────────────────────────
 document.getElementById("sanMin").addEventListener("change", revalidateRawTable);

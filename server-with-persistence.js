@@ -117,6 +117,8 @@ const httpServer = http.createServer((req, res) => {
   // Get latest readings endpoint
   else if (url.pathname === "/api/readings/latest") {
     handleLatestReadings(res);
+  } else if (url.pathname === "/api/bootstrap" && req.method === "GET") {
+    handleBootstrap(res);
   } else if (url.pathname === "/api/scan-targets" && req.method === "GET") {
     handleGetScanTargets(res);
   } else if (url.pathname === "/api/scan-targets" && req.method === "POST") {
@@ -184,6 +186,19 @@ function testTargetAccess(target) {
 async function handleGetScanTargets(res) {
   try {
     sendJson(res, 200, { targets: await dataStore.getScanTargets() });
+  } catch (err) {
+    sendJson(res, 500, { error: err.message });
+  }
+}
+
+async function handleBootstrap(res) {
+  try {
+    const targets = await dataStore.getScanTargets();
+    sendJson(res, 200, {
+      targets,
+      yamlRegisters: yamlRegisters.length,
+      bootedAt: new Date().toISOString(),
+    });
   } catch (err) {
     sendJson(res, 500, { error: err.message });
   }
