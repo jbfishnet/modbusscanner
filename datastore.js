@@ -270,16 +270,16 @@ class DataStore {
         ip,
         port,
         unitId,
-        reading.register || null,
-        reading.name || null,
-        reading.section || null,
-        reading.dataType || null,
-        reading.unit || null,
+        reading.register !== undefined && reading.register !== null ? reading.register : null,
+        reading.name !== undefined && reading.name !== null ? reading.name : null,
+        reading.section !== undefined && reading.section !== null ? reading.section : null,
+        reading.dataType !== undefined && reading.dataType !== null ? reading.dataType : null,
+        reading.unit !== undefined && reading.unit !== null ? reading.unit : null,
         reading.value !== undefined ? reading.value : null,
         reading.scaledValue !== undefined ? reading.scaledValue : null,
         reading.raw !== undefined ? reading.raw : null,
-        sanity.status || null,
-        sanity.reason || null,
+        sanity.status !== undefined && sanity.status !== null ? sanity.status : null,
+        sanity.reason !== undefined && sanity.reason !== null ? sanity.reason : null,
       ];
 
       stmt.run(params, (err) => {

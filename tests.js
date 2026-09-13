@@ -310,6 +310,33 @@ runner.describe("DataStore (SQLite)", () => {
     assert(csvRow.includes("25"));
   });
 
+  runner.it("should allow register 0 to be stored without SQLite NULL constraint errors", async () => {
+    const dataStore = require("./datastore.js");
+    const scanId = `zero-reg-${Date.now()}`;
+
+    await dataStore.init();
+    try {
+      await dataStore.recordScanStart(scanId, "127.0.0.1", 502, 1, "yaml_scan");
+      await dataStore.recordReading(scanId, "127.0.0.1", 502, 1, {
+        register: 0,
+        name: "Ambient_Temperature",
+        section: "Ambient",
+        dataType: "int16",
+        unit: "°C",
+        value: 0,
+        scaledValue: 0,
+        raw: 0,
+        sanity: { status: "ok", reason: "" },
+      });
+
+      const rows = await dataStore.getReadingsByTag("Ambient_Temperature");
+      assert.strictEqual(rows.length, 1);
+      assert.strictEqual(rows[0].register, 0);
+    } finally {
+      await dataStore.close();
+    }
+  });
+
   runner.it("should validate JSON export structure", () => {
     const readings = [
       {
