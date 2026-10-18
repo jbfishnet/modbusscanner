@@ -79,7 +79,7 @@ function testTargetAccess(target) {
 // Builds the (req, res) => void handler passed to http.createServer().
 // `dataStore` is injected rather than required directly so this module has
 // no hidden dependency on a specific DataStore instance/lifecycle.
-function createHttpHandler({ dataStore, onDashboardSettingsChanged }) {
+function createHttpHandler({ dataStore, poller, onDashboardSettingsChanged }) {
   async function handleExportCSV(url, res) {
     try {
       const tagName = url.searchParams.get("tag");
@@ -178,6 +178,7 @@ function createHttpHandler({ dataStore, onDashboardSettingsChanged }) {
       const checkedTargets = [];
       for (const target of targets) checkedTargets.push(await testTargetAccess(target));
       const savedTargets = await dataStore.saveScanTargets(checkedTargets);
+      if (poller) poller.pollOnce({ full: true }); // read new/changed targets in the background
       sendJson(res, 200, { targets: savedTargets });
     } catch (err) {
       sendJson(res, 400, { error: err.message });
@@ -203,7 +204,9 @@ function createHttpHandler({ dataStore, onDashboardSettingsChanged }) {
       const clean = sanitizeDashboard(payload);
       const id = payload.id === undefined || payload.id === null ? null : Number(payload.id);
       if (id !== null && !Number.isInteger(id)) throw new Error("Invalid dashboard id");
-      return { dashboard: await dataStore.saveDashboard({ id, ...clean }) };
+      const dashboard = await dataStore.saveDashboard({ id, ...clean });
+      if (poller) poller.pollSoon(); // newly pinned tags get a first sample right away
+      return { dashboard };
     });
 
   const handleDeleteDashboard = (url, res) =>
@@ -247,6 +250,13 @@ function createHttpHandler({ dataStore, onDashboardSettingsChanged }) {
       return { pollIntervalSec };
     });
 
+  // Live register values come from the background poller, never from the browser.
+  const handleYamlSnapshot = (res) =>
+    respond(res, async () => (poller ? poller.getSnapshot() : { updatedAt: null, rows: [], errors: [] }));
+
+  const handleYamlRefresh = (res) =>
+    respond(res, async () => (poller ? poller.refreshAll() : { updatedAt: null, rows: [], errors: [] }));
+
   const handleStatic = (url, res) => {
     const rel = decodeURIComponent(url.pathname).replace(/^\/web\//, "");
     const filePath = path.resolve(WEB_DIR, rel);
@@ -282,6 +292,8 @@ function createHttpHandler({ dataStore, onDashboardSettingsChanged }) {
     { method: "POST", path: "/api/dashboards", handle: handleSaveDashboard },
     { method: "DELETE", path: "/api/dashboards", handle: (req, res, url) => handleDeleteDashboard(url, res) },
     { method: "POST", path: "/api/query", handle: handleQuery },
+    { method: "GET", path: "/api/yaml-snapshot", handle: (req, res) => handleYamlSnapshot(res) },
+    { method: "POST", path: "/api/yaml-snapshot/refresh", handle: (req, res) => handleYamlRefresh(res) },
     { method: "GET", path: "/api/dashboard-settings", handle: (req, res) => handleGetDashboardSettings(res) },
     { method: "POST", path: "/api/dashboard-settings", handle: handleSaveDashboardSettings },
   ];

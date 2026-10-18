@@ -19,6 +19,7 @@ const { createHttpHandler } = require("./src/httpRoutes");
 const { createConnectionHandler } = require("./src/wsHandlers");
 const { isTrustedOrigin } = require("./src/security");
 const { createDashboardPoller } = require("./src/dashboardPoller");
+const { ensureCertificate, createDualProtocolServer } = require("./src/tls");
 
 let httpServer;
 let poller;
@@ -40,11 +41,21 @@ async function start() {
     await initDataStore();
 
     poller = createDashboardPoller({ dataStore });
-    httpServer = http.createServer(
-      createHttpHandler({ dataStore, onDashboardSettingsChanged: () => poller.reschedule() })
-    );
+    const handler = createHttpHandler({ dataStore, poller, onDashboardSettingsChanged: () => poller.reschedule() });
+    let wsServer;
+    if (config.ENABLE_TLS) {
+      const tlsCreds = await ensureCertificate(config.CERT_DIR);
+      const dual = createDualProtocolServer(tlsCreds, handler);
+      httpServer = dual.server;
+      wsServer = dual.httpsServer;
+      logger.info(`[TLS] HTTPS enabled (self-signed certificate: ${tlsCreds.certPath}); plain HTTP is redirected`);
+    } else {
+      httpServer = http.createServer(handler);
+      wsServer = httpServer;
+      logger.warn("[TLS] Disabled (TLS=off): serving plain HTTP");
+    }
     const wss = new WebSocketServer({
-      server: httpServer,
+      server: wsServer,
       verifyClient: (info) => isTrustedOrigin(info.req.headers),
     });
     wss.on("connection", createConnectionHandler({ dataStore }));
@@ -52,7 +63,7 @@ async function start() {
 
     await new Promise((resolve) => {
       httpServer.listen(config.HTTP_PORT, config.BIND_HOST, () => {
-        logger.info(`Modbus Scanner with persistence running → http://localhost:${config.HTTP_PORT}`);
+        logger.info(`Modbus Scanner with persistence running → ${config.ENABLE_TLS ? "https" : "http"}://localhost:${config.HTTP_PORT}`);
         logger.info(`Bound to ${config.BIND_HOST} (set BIND_HOST to allow LAN access)`);
         logger.info(`Export CSV: GET /api/export/csv?all=true`);
         logger.info(`Export JSON: GET /api/export/json?tag=<tag_name>`);

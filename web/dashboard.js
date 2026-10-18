@@ -60,7 +60,7 @@ const Dashboard = (function () {
 
   async function saveNow() {
     clearTimeout(saveTimer);
-    if (!current) return;
+    if (!current) return false;
     try {
       const { dashboard } = await api("/api/dashboards", {
         method: "POST",
@@ -68,23 +68,42 @@ const Dashboard = (function () {
       });
       // Server returns the sanitized document; adopt its generated ids.
       current.config = dashboard.config;
+      changed();
+      return true;
     } catch (err) {
       notify(`Could not save dashboard: ${err.message}`, true);
+      return false;
     }
   }
 
-  async function load() {
-    try {
-      dashboards = (await api("/api/dashboards")).dashboards;
-      pollIntervalSec = (await api("/api/dashboard-settings")).pollIntervalSec;
-    } catch (err) {
-      console.error("Could not load dashboards:", err.message);
-      return;
-    }
-    const wanted = Number(localStorage.getItem("dashboardId"));
-    current = dashboards.find((d) => d.id === wanted) || dashboards[0] || null;
-    if (root) renderShell();
-    if (visible) refresh();
+  const changed = () => window.dispatchEvent(new Event("dashboard-changed"));
+
+  let loading = null;
+  // Loads dashboards and the sampling interval independently (a failing
+  // settings request must not leave the dashboard unusable). Resolves to
+  // true when a dashboard is available.
+  function load() {
+    if (loading) return loading;
+    loading = (async () => {
+      try {
+        dashboards = (await api("/api/dashboards")).dashboards;
+      } catch (err) {
+        console.error("Could not load dashboards:", err.message);
+        return false;
+      }
+      try {
+        pollIntervalSec = (await api("/api/dashboard-settings")).pollIntervalSec;
+      } catch (err) {
+        console.error("Could not load dashboard settings:", err.message);
+      }
+      const wanted = Number(localStorage.getItem("dashboardId"));
+      current = dashboards.find((d) => d.id === wanted) || dashboards[0] || null;
+      if (root) renderShell();
+      if (visible) refresh();
+      changed();
+      return !!current;
+    })().finally(() => { loading = null; });
+    return loading;
   }
 
   // ── Shell (toolbar + grid) ─────────────────────────────────────────────────
@@ -644,9 +663,14 @@ const Dashboard = (function () {
       clearInterval(refreshTimer);
       refreshTimer = null;
     },
+    /** Is this register on the current dashboard? (drives the ✓ on the "+" buttons) */
+    hasSeries(name) {
+      return !!current && current.config.panels.some((p) => p.series.some((s) => s.name === name));
+    },
     /** "+" button in the register tables: pin a tag to the first time-series panel. */
     async addSeries(name) {
-      if (!current || !name) return;
+      if (!name) return;
+      if (!current && !(await load())) return notify("Dashboard could not be loaded. Is the server running?", true);
       let panel = current.config.panels.find((p) => p.type === "timeseries");
       if (!panel) {
         panel = { id: newPanelId(), type: "timeseries", title: "Live Metrics", width: 12, height: 2, series: [], options: { drawStyle: "line", min: null, max: null, decimals: null, thresholds: [] } };
@@ -654,9 +678,13 @@ const Dashboard = (function () {
       }
       if (panel.series.some((s) => s.name === name)) return notify(`${shortName(name)} is already on "${current.name}".`);
       panel.series.push({ name, axis: "auto" });
-      notify(`Added ${shortName(name)} to "${current.name}".`);
-      await saveNow();
-      if (visible) { renderPanels(); refresh(); }
+      if (!(await saveNow())) { panel.series.pop(); return; } // the server starts sampling it right away
+      notify(`Added ${shortName(name)} to "${current.name}". The server is sampling it now.`);
+      if (visible) {
+        renderPanels();
+        refresh();
+        setTimeout(refresh, 3000); // pick up the first background sample
+      }
     },
   };
 })();

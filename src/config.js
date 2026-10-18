@@ -13,6 +13,15 @@ const HTTP_PORT = process.env.PORT || 8080;
 // dashboard from another device) can opt back in explicitly.
 const BIND_HOST = process.env.BIND_HOST || "127.0.0.1";
 
+// HTTPS with an auto-generated self-signed certificate is on by default; the
+// same port also answers plain HTTP with a redirect to HTTPS. TLS=off turns
+// it back into a plain-HTTP server (e.g. behind a TLS-terminating proxy).
+const ENABLE_TLS = !["off", "false", "0"].includes(String(process.env.TLS || "").toLowerCase());
+// Certificate + key live next to the database so they persist (Docker volume,
+// Electron user data) and the browser only has to trust the cert once.
+const CERT_DIR = process.env.CERT_DIR
+  || path.join(path.dirname(process.env.DB_PATH || path.join(__dirname, "..", "modbus_readings.db")), "certs");
+
 // Modbus scanning
 const MODBUS_CONNECT_TIMEOUT_MS = 3000;
 const SCAN_STEP_DELAY_MS = 20;
@@ -100,6 +109,8 @@ function getYamlRegisters() {
 module.exports = {
   HTTP_PORT,
   BIND_HOST,
+  ENABLE_TLS,
+  CERT_DIR,
   MODBUS_CONNECT_TIMEOUT_MS,
   SCAN_STEP_DELAY_MS,
   MAX_BATCH_SIZE,

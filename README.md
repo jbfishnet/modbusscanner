@@ -12,7 +12,7 @@ npm install
 npm start
 ```
 
-Then open **http://localhost:8080** in your browser.
+Then open **https://localhost:8080** in your browser.
 
 ## Docker
 
@@ -27,7 +27,7 @@ docker run --rm --name modbusscanner \
 	modbusscanner:local
 ```
 
-Open **http://localhost:8080**. Stop the container with `Ctrl+C`; the SQLite database remains in the Docker volume. Docker Desktop must be allowed to reach the Modbus device's network, VPN, and firewall. On Windows PowerShell, use the same commands without changing the port mapping.
+Open **https://localhost:8080**. Stop the container with `Ctrl+C`; the SQLite database remains in the Docker volume. Docker Desktop must be allowed to reach the Modbus device's network, VPN, and firewall. On Windows PowerShell, use the same commands without changing the port mapping.
 
 The published images are available as:
 
@@ -140,3 +140,21 @@ The **Dashboard** tab is a Grafana-style panel grid. Everything is persisted in 
 - **Retention:** raw readings are kept for 7 days (`raw_retention_days` setting), then rolled up to hourly avg/min/max (`readings_hourly`) and pruned.
 - **Axes** auto-scale to round bounds with unit-aware labels: SI prefixes for `W`, `Wh`, `A`, `V`, `Pa`, … (`1.5 kW`), plain `°C` / `%`, and compact `K`/`M` for unit-less values. Series with different units get separate left/right axes. Min/max can be fixed per panel.
 - Frontend code lives in `web/` (uPlot is vendored in `web/vendor/`, so it works offline).
+
+## HTTPS
+
+The server speaks HTTPS by default using an auto-generated self-signed certificate (valid for `localhost`, `127.0.0.1`, `::1`, the host name and its LAN IPs). The same port also accepts plain HTTP and redirects it to HTTPS, so `http://localhost:8080` takes you to `https://localhost:8080`.
+
+- The certificate and key are created on first start in a `certs/` folder next to the database (override with `CERT_DIR`) and renewed automatically 30 days before expiry. In Docker they live in the `/data` volume.
+- Browsers warn about self-signed certificates once; accept it (or add `certs/server.crt` to your trust store).
+- `TLS=off` serves plain HTTP again, e.g. behind a TLS-terminating reverse proxy.
+- The Electron app trusts the certificate for its own loopback address only.
+
+## Your data and updates
+
+Device IPs (scan targets), dashboards and history are user data and are never overwritten by a new version or update.
+
+- **Desktop app:** the database lives in the per-user data folder (`~/Library/Application Support/modbusscanner` on macOS, `%APPDATA%\modbusscanner` on Windows), not in the install directory that updates replace. A database from an earlier version in the old location is copied over once on first start.
+- **Backup of the IPs:** every save of the scan targets is mirrored to `<database>.targets.json` next to the database. If the database is ever missing or empty while that file exists, the targets are restored on start.
+- **Guard:** the targets can't be replaced by an empty list, and `modbus.yaml` is only copied to the user folder if it doesn't exist yet.
+- Docker: keep the `/data` volume; it holds the database, backup and certificate.

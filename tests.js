@@ -12,6 +12,18 @@
 
 const assert = require("assert");
 
+// Never touch the real modbus_readings.db: run all DataStore tests on a temp file.
+{
+  const os = require("os");
+  const path = require("path");
+  const fs = require("fs");
+  if (!process.env.DB_PATH) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "modbus-unit-tests-"));
+    process.env.DB_PATH = path.join(tmpDir, "test.db");
+    process.on("exit", () => { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ } });
+  }
+}
+
 // Test Runner
 class TestRunner {
   constructor() {
@@ -559,7 +571,8 @@ async function withTempStore(fn) {
   const fs = require("fs");
   const os = require("os");
   const path = require("path");
-  const dbPath = path.join(os.tmpdir(), `modbus-dash-test-${process.pid}-${Date.now()}.db`);
+  const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), "modbus-dash-test-"));
+  const dbPath = path.join(dbDir, "test.db");
   const prev = process.env.DB_PATH;
   process.env.DB_PATH = dbPath;
   const modPath = require.resolve("./datastore.js");
@@ -573,7 +586,7 @@ async function withTempStore(fn) {
     delete require.cache[modPath];
     if (prev === undefined) delete process.env.DB_PATH;
     else process.env.DB_PATH = prev;
-    if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+    fs.rmSync(dbDir, { recursive: true, force: true });
   }
 }
 
@@ -744,6 +757,80 @@ runner.describe("Dashboard persistence & history", () => {
       const values = pts.map((p) => p[1]).sort((a, b) => a - b);
       assert.deepStrictEqual(values, [15, 99]);
     });
+  });
+});
+
+runner.describe("Scan target (IP) protection", () => {
+  const target = { ip: "192.168.1.40", port: 502, unitId: 1 };
+
+  runner.it("mirrors saved targets to a backup file and restores them into a fresh database", async () => {
+    const fs = require("fs");
+    const os = require("os");
+    const path = require("path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "modbus-targets-"));
+    const dbPath = path.join(dir, "a.db");
+    const prev = process.env.DB_PATH;
+    const modPath = require.resolve("./datastore.js");
+    const open = async () => {
+      process.env.DB_PATH = dbPath;
+      delete require.cache[modPath];
+      const store = require("./datastore.js");
+      await store.init();
+      return store;
+    };
+    try {
+      let store = await open();
+      await store.saveScanTargets([target]);
+      await store.close();
+      assert(fs.existsSync(`${dbPath}.targets.json`), "backup file must exist");
+
+      // Simulate an update/reinstall that replaces the database file.
+      fs.rmSync(dbPath);
+      store = await open();
+      const restored = await store.getScanTargets();
+      assert.deepStrictEqual(restored.map((t) => [t.ip, t.port, t.unitId]), [["192.168.1.40", 502, 1]]);
+      await store.close();
+    } finally {
+      delete require.cache[modPath];
+      if (prev === undefined) delete process.env.DB_PATH;
+      else process.env.DB_PATH = prev;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  runner.it("never replaces the configured targets with an empty list", async () => {
+    await withTempStore(async (store) => {
+      await store.saveScanTargets([target]);
+      await assert.rejects(store.saveScanTargets([]), /At least one scan target/);
+      assert.strictEqual((await store.getScanTargets()).length, 1);
+    });
+  });
+
+  runner.it("keeps existing targets untouched when reopened (no overwrite on restart or update)", async () => {
+    const fs = require("fs");
+    const os = require("os");
+    const path = require("path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "modbus-targets-"));
+    const dbPath = path.join(dir, "b.db");
+    const prev = process.env.DB_PATH;
+    const modPath = require.resolve("./datastore.js");
+    try {
+      for (let i = 0; i < 2; i++) {
+        process.env.DB_PATH = dbPath;
+        delete require.cache[modPath];
+        const store = require("./datastore.js");
+        await store.init();
+        if (i === 0) await store.saveScanTargets([target, { ip: "10.0.0.7", port: 1502, unitId: 3 }]);
+        const ips = (await store.getScanTargets()).map((t) => `${t.ip}:${t.port}/${t.unitId}`);
+        assert.deepStrictEqual(ips, ["192.168.1.40:502/1", "10.0.0.7:1502/3"]);
+        await store.close();
+      }
+    } finally {
+      delete require.cache[modPath];
+      if (prev === undefined) delete process.env.DB_PATH;
+      else process.env.DB_PATH = prev;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

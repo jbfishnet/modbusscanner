@@ -10,6 +10,23 @@ const { app, BrowserWindow } = require("electron");
 process.env.MODBUS_YAML_PATH =
   process.env.MODBUS_YAML_PATH || path.join(app.getPath("userData"), "modbus.yaml");
 
+// Keep all user data (database with scan targets and history, certificates,
+// target backup) in the per-user data folder, never in the install directory
+// that an update replaces. A database left in the old location by an earlier
+// version is copied over once; the original is not removed or modified.
+if (!process.env.DB_PATH) {
+  const dataDir = app.getPath("userData");
+  const dbPath = path.join(dataDir, "modbus_readings.db");
+  const legacyDb = path.join(__dirname, "..", "modbus_readings.db");
+  fs.mkdirSync(dataDir, { recursive: true });
+  if (!fs.existsSync(dbPath) && fs.existsSync(legacyDb)) {
+    fs.copyFileSync(legacyDb, dbPath);
+    const legacyBackup = `${legacyDb}.targets.json`;
+    if (fs.existsSync(legacyBackup)) fs.copyFileSync(legacyBackup, `${dbPath}.targets.json`);
+  }
+  process.env.DB_PATH = dbPath;
+}
+
 const config = require("../src/config");
 const server = require("../server-with-persistence");
 const { setupAutoUpdate } = require("./updater");
@@ -23,6 +40,14 @@ function ensureUserYaml() {
 }
 
 let mainWindow;
+
+// The embedded server uses a self-signed certificate. Trust it only for our
+// own loopback origin; every other certificate error keeps its default (reject).
+app.on("certificate-error", (event, webContents, url, error, certificate, callback) => {
+  const ours = new URL(url).origin === `https://127.0.0.1:${config.HTTP_PORT}`;
+  if (ours) event.preventDefault();
+  callback(ours);
+});
 
 async function createWindow() {
   await server.start();
@@ -39,7 +64,7 @@ async function createWindow() {
     mainWindow = null;
   });
 
-  mainWindow.loadURL(`http://127.0.0.1:${config.HTTP_PORT}`);
+  mainWindow.loadURL(`${config.ENABLE_TLS ? "https" : "http"}://127.0.0.1:${config.HTTP_PORT}`);
   setupAutoUpdate();
 }
 

@@ -18,6 +18,10 @@ const fs = require("fs");
 
 // Database file location
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "modbus_readings.db");
+// Scan targets (the user's device IPs) are also mirrored to a small JSON file
+// next to the database, so they survive a lost or replaced database file
+// (app update, reinstall, accidental deletion).
+const TARGETS_BACKUP_PATH = `${DB_PATH}.targets.json`;
 
 class DataStore {
   constructor() {
@@ -42,8 +46,9 @@ class DataStore {
         // Enable foreign keys
         this.db.run("PRAGMA foreign_keys = ON", (err) => {
           if (err) reject(err);
-          else this.createTables().then(() => {
+          else this.createTables().then(async () => {
             this.initialized = true;
+            await this.restoreTargetsFromBackup();
             resolve();
           }).catch(reject);
         });
@@ -199,12 +204,61 @@ class DataStore {
   }
 
   /**
+   * Mirror the targets to <db>.targets.json (atomic write). Failures
+   * are logged, not thrown: the database stays the source of truth.
+   */
+  writeTargetsBackup(targets) {
+    try {
+      const payload = {
+        savedAt: new Date().toISOString(),
+        targets: targets.map(({ ip, port, unitId }) => ({ ip, port, unitId })),
+      };
+      const tmp = `${TARGETS_BACKUP_PATH}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(payload, null, 2));
+      fs.renameSync(tmp, TARGETS_BACKUP_PATH);
+    } catch (err) {
+      console.error("[DataStore] Could not write scan target backup:", err.message);
+    }
+  }
+
+  /**
+   * If the database has no scan targets but a backup exists (fresh or
+   * replaced database after an update/reinstall), bring the IPs back.
+   */
+  async restoreTargetsFromBackup() {
+    const existing = await this._all(`SELECT 1 FROM scan_targets LIMIT 1`);
+    if (existing.length) {
+      // Keep the backup current even if it predates this feature.
+      if (!fs.existsSync(TARGETS_BACKUP_PATH)) this.writeTargetsBackup(await this.getScanTargets());
+      return;
+    }
+    if (!fs.existsSync(TARGETS_BACKUP_PATH)) return;
+    try {
+      const { targets } = JSON.parse(fs.readFileSync(TARGETS_BACKUP_PATH, "utf8"));
+      const valid = (Array.isArray(targets) ? targets : []).filter(
+        (t) => t && typeof t.ip === "string" && Number.isInteger(t.port) && Number.isInteger(t.unitId)
+      );
+      for (const t of valid) {
+        await this._run(`INSERT OR IGNORE INTO scan_targets (ip, port, unitId) VALUES (?, ?, ?)`, [t.ip, t.port, t.unitId]);
+      }
+      if (valid.length) console.log(`[DataStore] Restored ${valid.length} scan target(s) from ${TARGETS_BACKUP_PATH}`);
+    } catch (err) {
+      console.error("[DataStore] Could not restore scan targets from backup:", err.message);
+    }
+  }
+
+  /**
    * Replace the configured Modbus scan targets.
    */
   saveScanTargets(targets) {
     return new Promise((resolve, reject) => {
       if (!this.initialized) {
         reject(new Error("DataStore not initialized"));
+        return;
+      }
+      // Never wipe the configured device IPs by saving an empty list.
+      if (!Array.isArray(targets) || targets.length === 0) {
+        reject(new Error("At least one scan target is required"));
         return;
       }
 
@@ -244,7 +298,10 @@ class DataStore {
                 this.db.run("ROLLBACK");
                 reject(commitErr);
               }
-              else this.getScanTargets().then(resolve).catch(reject);
+              else this.getScanTargets().then((saved) => {
+                this.writeTargetsBackup(saved);
+                resolve(saved);
+              }).catch(reject);
             });
           });
         });

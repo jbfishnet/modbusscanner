@@ -8,6 +8,8 @@ const root = __dirname.replace(/tests$/, '');
 const uiPort = 18081;
 const modbusPort = 15021;
 const dbPath = path.join(root, 'modbus_ui_test.db');
+// The DB's scan-target backup must go too, or a deleted DB would restore old targets.
+const removeDb = () => { for (const f of [dbPath, `${dbPath}.targets.json`]) fs.rmSync(f, { force: true }); };
 
 function waitForOutput(child, text, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
@@ -55,7 +57,7 @@ function stopProcess(child) {
 }
 
 test('startup restores persisted scan targets from the SQLite database', async ({ browser }) => {
-  if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+  removeDb();
 
   await new Promise((resolve, reject) => {
     const db = new sqlite3.Database(dbPath);
@@ -81,7 +83,7 @@ test('startup restores persisted scan targets from the SQLite database', async (
 
   const uiServer = spawn(process.execPath, ['server-with-persistence.js'], {
     cwd: root,
-    env: { ...process.env, PORT: String(uiPort), DB_PATH: dbPath },
+    env: { ...process.env, PORT: String(uiPort), DB_PATH: dbPath, TLS: 'off' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -101,16 +103,16 @@ test('startup restores persisted scan targets from the SQLite database', async (
     await page.close();
   } finally {
     await stopProcess(uiServer);
-    if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+    removeDb();
   }
 });
 
 test('_entering a target and starting a scan persists it automatically', async ({ browser }) => {
-  if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+  removeDb();
 
   const uiServer = spawn(process.execPath, ['server-with-persistence.js'], {
     cwd: root,
-    env: { ...process.env, PORT: String(uiPort), DB_PATH: dbPath },
+    env: { ...process.env, PORT: String(uiPort), DB_PATH: dbPath, TLS: 'off' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -147,12 +149,12 @@ test('_entering a target and starting a scan persists it automatically', async (
   } finally {
     await stopProcess(modbusServer);
     await stopProcess(uiServer);
-    if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+    removeDb();
   }
 });
 
-test('startup YAML scan stays silent and dashboard add button sits in the sanity column', async ({ browser }) => {
-  if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+test('YAML values arrive from the background poller without a scan, and tabs are never blocked', async ({ browser }) => {
+  removeDb();
 
   await new Promise((resolve, reject) => {
     const db = new sqlite3.Database(dbPath);
@@ -178,7 +180,7 @@ test('startup YAML scan stays silent and dashboard add button sits in the sanity
 
   const uiServer = spawn(process.execPath, ['server-with-persistence.js'], {
     cwd: root,
-    env: { ...process.env, PORT: String(uiPort), DB_PATH: dbPath },
+    env: { ...process.env, PORT: String(uiPort), DB_PATH: dbPath, TLS: 'off' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -197,9 +199,17 @@ test('startup YAML scan stays silent and dashboard add button sits in the sanity
     const page = await browser.newPage();
     await page.goto(`http://127.0.0.1:${uiPort}`);
 
-    await expect(page.locator('#yamlBody tr:not(.section-header)')).toHaveCount(1, { timeout: 30000 });
+    await page.locator('#tabYaml').click();
+    await expect(page.locator('#yamlBody tr:not(.section-header)').first()).toBeVisible({ timeout: 30000 });
     await expect(page.locator('#progressCard')).not.toBeVisible();
     await expect(page.locator('#btnCancel')).toBeDisabled();
+    await expect(page.locator('#yamlSnapshotNote')).toContainText(/read by the server in the background/);
+
+    // Reading values never prevents changing tabs.
+    for (const tab of ['#tabDashboard', '#tabRaw', '#tabDiscover', '#tabYaml']) {
+      await page.locator(tab).click();
+      await expect(page.locator(tab)).toHaveClass(/active/);
+    }
 
     const firstRow = page.locator('#yamlBody tr:not(.section-header)').first();
     await expect(firstRow.locator('td').nth(5)).toContainText(/OK/i);
@@ -210,16 +220,16 @@ test('startup YAML scan stays silent and dashboard add button sits in the sanity
   } finally {
     await stopProcess(modbusServer);
     await stopProcess(uiServer);
-    if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+    removeDb();
   }
 });
 
 test('dashboard persists dashboards, panels and history across reload', async ({ browser }) => {
-  if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+  removeDb();
 
   const uiServer = spawn(process.execPath, ['server-with-persistence.js'], {
     cwd: root,
-    env: { ...process.env, PORT: String(uiPort), DB_PATH: dbPath },
+    env: { ...process.env, PORT: String(uiPort), DB_PATH: dbPath, TLS: 'off' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -258,16 +268,15 @@ test('dashboard persists dashboards, panels and history across reload', async ({
     // Pin a tag from the YAML table: persists to the dashboard config.
     await page.locator('#tabYaml').click();
     await page.locator('#btnScanYaml').click();
-    await expect(page.locator('#yamlBody tr:not(.section-header)')).toHaveCount(1, { timeout: 40000 });
+    await expect(page.locator('#yamlBody tr:not(.section-header)').first()).toBeVisible({ timeout: 40000 });
     const [addSave] = await Promise.all([
       page.waitForResponse((res) => res.url().endsWith('/api/dashboards') && res.request().method() === 'POST'),
       page.locator('.dashboard-add-btn').first().click(),
     ]);
     expect(addSave.ok()).toBe(true);
+    await expect(page.locator('.dashboard-add-btn').first()).toHaveText('✓');
 
-    // The readings table already holds history, so the chart renders from the server.
-    // (Tab switching is blocked while a scan is running.)
-    await page.waitForFunction(() => scanning === false, null, { timeout: 30000 });
+    // The background poller samples the new tag right away, so the chart gets data, so the chart renders from the server.
     await page.locator('#tabDashboard').click();
     await expect(page.locator('.dash-panel .uplot')).toBeVisible({ timeout: 15000 });
 
@@ -277,7 +286,6 @@ test('dashboard persists dashboards, panels and history across reload', async ({
 
     // Everything survives a reload, including the chart's history.
     await page.reload();
-    await page.waitForFunction(() => startupYamlScanStarted && scanning === false, null, { timeout: 30000 });
     await page.locator('#tabDashboard').click();
     await expect(page.locator('#dashSelect option')).toHaveCount(2);
     await page.locator('#dashSelect').selectOption({ label: 'Plant Overview' });
@@ -292,7 +300,6 @@ test('dashboard persists dashboards, panels and history across reload', async ({
     await expect(page.locator('.dash-empty')).toBeVisible();
 
     await page.reload();
-    await page.waitForFunction(() => startupYamlScanStarted && scanning === false, null, { timeout: 30000 });
     await page.locator('#tabDashboard').click();
     await page.locator('#dashSelect').selectOption({ label: 'Plant Overview' });
     await expect(page.locator('.dash-empty')).toBeVisible();
@@ -302,16 +309,16 @@ test('dashboard persists dashboards, panels and history across reload', async ({
   } finally {
     await stopProcess(modbusServer);
     await stopProcess(uiServer);
-    if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+    removeDb();
   }
 });
 
 test('background poller records dashboard tags without any browser open', async () => {
-  if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+  removeDb();
 
   const uiServer = spawn(process.execPath, ['server-with-persistence.js'], {
     cwd: root,
-    env: { ...process.env, PORT: String(uiPort), DB_PATH: dbPath },
+    env: { ...process.env, PORT: String(uiPort), DB_PATH: dbPath, TLS: 'off' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const modbusServer = spawn(process.execPath, ['server.js'], {
@@ -359,16 +366,43 @@ test('background poller records dashboard tags without any browser open', async 
   } finally {
     await stopProcess(modbusServer);
     await stopProcess(uiServer);
-    if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+    removeDb();
+  }
+});
+
+test('plain HTTP redirects to HTTPS (self-signed) and the app and WebSocket work', async ({ browser }) => {
+  removeDb();
+  const certDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'modbus-ui-certs-'));
+
+  const uiServer = spawn(process.execPath, ['server-with-persistence.js'], {
+    cwd: root,
+    env: { ...process.env, PORT: String(uiPort), DB_PATH: dbPath, CERT_DIR: certDir },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  try {
+    await waitForOutput(uiServer, `localhost:${uiPort}`);
+    const context = await browser.newContext({ ignoreHTTPSErrors: true });
+    const page = await context.newPage();
+    await page.goto(`http://127.0.0.1:${uiPort}/`);
+    expect(page.url()).toBe(`https://127.0.0.1:${uiPort}/`);
+    await expect(page.locator('#targetList')).toBeAttached();
+    // The page must open its WebSocket over wss:// and have it accepted.
+    await page.waitForFunction(() => ws && ws.readyState === 1 && ws.url.startsWith('wss://'), null, { timeout: 15000 });
+    await context.close();
+  } finally {
+    await stopProcess(uiServer);
+    removeDb();
+    fs.rmSync(certDir, { recursive: true, force: true });
   }
 });
 
 test('UI flow works for target setup, raw scan, YAML scan, discovery, export, and clear', async ({ browser }) => {
-  if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+  removeDb();
 
   const uiServer = spawn(process.execPath, ['server-with-persistence.js'], {
     cwd: root,
-    env: { ...process.env, PORT: String(uiPort), DB_PATH: dbPath },
+    env: { ...process.env, PORT: String(uiPort), DB_PATH: dbPath, TLS: 'off' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -417,12 +451,18 @@ test('UI flow works for target setup, raw scan, YAML scan, discovery, export, an
 
     await page.locator('#tabYaml').click();
     await page.locator('#btnScanYaml').click();
-    await expect(page.locator('#yamlBody tr:not(.section-header)')).toHaveCount(1, { timeout: 40000 });
+    await expect(page.locator('#yamlBody tr:not(.section-header)').first()).toBeVisible({ timeout: 40000 });
     await expect(page.locator('#btnScanDiscover')).toBeEnabled({ timeout: 20000 });
 
     await page.locator('#tabDiscover').click();
     await page.locator('#btnScanDiscover').click();
     await expect(page.locator('#progressCard')).toBeVisible();
+    // A running scan must not block switching tabs (it keeps running server-side).
+    await page.locator('#tabDashboard').click();
+    await expect(page.locator('#tabDashboard')).toHaveClass(/active/);
+    await page.locator('#tabYaml').click();
+    await expect(page.locator('#tabYaml')).toHaveClass(/active/);
+    await expect(page.locator('#btnCancel')).toBeEnabled();
     await page.locator('#btnCancel').click();
     await expect(page.locator('#btnCancel')).toBeDisabled();
 
@@ -430,6 +470,6 @@ test('UI flow works for target setup, raw scan, YAML scan, discovery, export, an
   } finally {
     await stopProcess(modbusServer);
     await stopProcess(uiServer);
-    if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+    removeDb();
   }
 });

@@ -4,11 +4,15 @@ const assert = require("assert");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const http = require("http");
+const https = require("https");
+const os = require("os");
+const { WebSocket } = require("ws");
 const path = require("path");
 const ModbusRTU = require("modbus-serial");
 
 const root = __dirname;
-const databasePath = path.join(root, "modbus_readings.db");
+// Throwaway DB: this test deletes it, so it must never be the real modbus_readings.db.
+const databasePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "modbus-integration-")), "test.db");
 
 function waitForOutput(child, text, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
@@ -59,7 +63,7 @@ function get(pathname, port, headers) {
       let body = "";
       response.setEncoding("utf8");
       response.on("data", (chunk) => { body += chunk; });
-      response.on("end", () => resolve({ statusCode: response.statusCode, body }));
+      response.on("end", () => resolve({ statusCode: response.statusCode, headers: response.headers, body }));
     });
     request.on("error", reject);
   });
@@ -85,11 +89,12 @@ function post(pathname, port, payload) {
 }
 
 async function testHttpServer() {
-  if (fs.existsSync(databasePath)) fs.rmSync(databasePath);
+  fs.rmSync(databasePath, { force: true });
+  fs.rmSync(`${databasePath}.targets.json`, { force: true });
   const port = 18080;
   const server = spawn(process.execPath, ["server-with-persistence.js"], {
     cwd: root,
-    env: { ...process.env, PORT: String(port) },
+    env: { ...process.env, PORT: String(port), TLS: "off", DB_PATH: databasePath },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -119,7 +124,8 @@ async function testHttpServer() {
     assert.strictEqual(crossOrigin.statusCode, 403);
   } finally {
     await stopProcess(server);
-    if (fs.existsSync(databasePath)) fs.rmSync(databasePath);
+    fs.rmSync(databasePath, { force: true });
+  fs.rmSync(`${databasePath}.targets.json`, { force: true });
   }
 }
 
@@ -149,9 +155,66 @@ async function testModbusServer() {
   }
 }
 
+async function testTlsServer() {
+  const port = 18082;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "modbus-tls-"));
+  const dbFile = path.join(tmp, "tls.db");
+  const certDir = path.join(tmp, "certs");
+  const server = spawn(process.execPath, ["server-with-persistence.js"], {
+    cwd: root,
+    env: { ...process.env, PORT: String(port), DB_PATH: dbFile, CERT_DIR: certDir },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const insecure = { rejectUnauthorized: false };
+
+  try {
+    await waitForOutput(server, `localhost:${port}`);
+
+    // Plain HTTP on the same port -> 308 redirect to https, path and query kept.
+    const redirect = await get("/api/stats?x=1", port);
+    assert.strictEqual(redirect.statusCode, 308);
+    assert.strictEqual(redirect.headers.location, `https://127.0.0.1:${port}/api/stats?x=1`);
+
+    // HTTPS works with the generated self-signed certificate.
+    const secure = await new Promise((resolve, reject) => {
+      https.get({ hostname: "127.0.0.1", port, path: "/api/stats", ...insecure }, (res) => {
+        const cert = res.socket.getPeerCertificate();
+        let body = "";
+        res.on("data", (c) => { body += c; });
+        res.on("end", () => resolve({ statusCode: res.statusCode, body, cert }));
+      }).on("error", reject);
+    });
+    assert.strictEqual(secure.statusCode, 200);
+    assert.doesNotThrow(() => JSON.parse(secure.body));
+    assert(secure.cert.subjectaltname.includes("IP Address:127.0.0.1"), "cert must cover 127.0.0.1");
+    assert(secure.cert.subjectaltname.includes("DNS:localhost"), "cert must cover localhost");
+
+    // Without the opt-out a strict client rejects the self-signed cert.
+    await assert.rejects(new Promise((resolve, reject) => {
+      https.get({ hostname: "127.0.0.1", port, path: "/" }, resolve).on("error", reject);
+    }), /self.signed|SELF_SIGNED|certificate/i);
+
+    // WebSocket over wss:// is accepted.
+    await new Promise((resolve, reject) => {
+      const ws = new WebSocket(`wss://127.0.0.1:${port}`, insecure);
+      ws.once("message", () => { ws.close(); resolve(); });
+      ws.once("error", reject);
+    });
+
+    // Certificate persisted and is reused after a restart.
+    assert(fs.existsSync(path.join(certDir, "server.crt")));
+    assert(fs.existsSync(path.join(certDir, "server.key")));
+  } finally {
+    await stopProcess(server);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 (async () => {
   await testHttpServer();
   console.log("HTTP integration test passed");
+  await testTlsServer();
+  console.log("TLS integration test passed");
   await testModbusServer();
   console.log("Modbus integration test passed");
 })().catch((error) => {
