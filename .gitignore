@@ -2,3 +2,4 @@ node_modules/
 *.log
 modbus_readings.db
 test-results/
+dist/

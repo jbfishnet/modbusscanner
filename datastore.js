@@ -116,6 +116,35 @@ class DataStore {
           (err) => { if (err) reject(err); }
         );
 
+        this.db.run(
+          `CREATE INDEX IF NOT EXISTS idx_name_ts ON readings(name, timestamp)`,
+          (err) => { if (err) reject(err); }
+        );
+
+        // Dashboards: one JSON config document per dashboard
+        this.db.run(`
+          CREATE TABLE IF NOT EXISTS dashboards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            config TEXT NOT NULL,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          )
+        `, (err) => { if (err) reject(err); });
+
+        // Hourly rollups of readings older than the raw-retention window
+        this.db.run(`
+          CREATE TABLE IF NOT EXISTS readings_hourly (
+            ip TEXT NOT NULL,
+            name TEXT NOT NULL,
+            hour INTEGER NOT NULL,
+            avg REAL NOT NULL,
+            min REAL NOT NULL,
+            max REAL NOT NULL,
+            count INTEGER NOT NULL,
+            PRIMARY KEY (ip, name, hour)
+          )
+        `, (err) => { if (err) reject(err); });
+
         // Settings table for retention policy
         this.db.run(`
           CREATE TABLE IF NOT EXISTS settings (
@@ -257,25 +286,177 @@ class DataStore {
     });
   }
 
-  /**
-   * Dashboard chart config: just the list of tag names the user has added
-   * (not their history — the readings table already retains that).
-   */
-  async getDashboardConfig() {
-    const raw = await this.getSetting("dashboard_tags");
-    if (!raw) return [];
-    try {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed.filter((t) => typeof t === "string") : [];
-    } catch {
-      return [];
-    }
+  // ── Promise wrappers around sqlite3's callback API ──────────────────────
+  _all(sql, params = []) {
+    return new Promise((resolve, reject) => {
+      if (!this.initialized) return reject(new Error("DataStore not initialized"));
+      this.db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || [])));
+    });
   }
 
-  async saveDashboardConfig(tagNames) {
-    const clean = Array.isArray(tagNames) ? tagNames.filter((t) => typeof t === "string") : [];
-    await this.setSetting("dashboard_tags", JSON.stringify(clean));
-    return clean;
+  _run(sql, params = []) {
+    return new Promise((resolve, reject) => {
+      if (!this.initialized) return reject(new Error("DataStore not initialized"));
+      this.db.run(sql, params, function (err) {
+        if (err) reject(err);
+        else resolve({ lastID: this.lastID, changes: this.changes });
+      });
+    });
+  }
+
+  // ── Dashboards ──────────────────────────────────────────────────────────
+  _rowToDashboard(row) {
+    let config = {};
+    try { config = JSON.parse(row.config); } catch { /* corrupt row -> empty config */ }
+    return { id: row.id, name: row.name, config, updatedAt: row.updated_at };
+  }
+
+  /**
+   * All dashboards. On first run, migrates the legacy `dashboard_tags`
+   * setting (a flat list of tag names) into a first dashboard.
+   */
+  async listDashboards() {
+    let rows = await this._all(`SELECT * FROM dashboards ORDER BY id ASC`);
+    if (rows.length === 0) {
+      const legacy = await this.getSetting("dashboard_tags");
+      let tags = [];
+      try { tags = JSON.parse(legacy || "[]").filter((t) => typeof t === "string"); } catch { /* ignore */ }
+      const config = {
+        panels: [{
+          id: "p1", type: "timeseries", title: "Live Metrics", width: 12, height: 2,
+          series: tags.map((name) => ({ name })), options: {},
+        }],
+        timeRangeSec: 3600,
+        refreshSec: 10,
+      };
+      await this._run(`INSERT INTO dashboards (name, config) VALUES (?, ?)`, ["Plant Overview", JSON.stringify(config)]);
+      rows = await this._all(`SELECT * FROM dashboards ORDER BY id ASC`);
+    }
+    return rows.map((r) => this._rowToDashboard(r));
+  }
+
+  async getDashboard(id) {
+    const rows = await this._all(`SELECT * FROM dashboards WHERE id = ?`, [id]);
+    return rows[0] ? this._rowToDashboard(rows[0]) : null;
+  }
+
+  /** Create (no id) or update a dashboard with an already-sanitized {name, config}. */
+  async saveDashboard({ id, name, config }) {
+    const json = JSON.stringify(config);
+    if (id) {
+      const res = await this._run(
+        `UPDATE dashboards SET name = ?, config = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [name, json, id]
+      );
+      if (!res.changes) throw new Error("Dashboard not found");
+      return this.getDashboard(id);
+    }
+    const res = await this._run(`INSERT INTO dashboards (name, config) VALUES (?, ?)`, [name, json]);
+    return this.getDashboard(res.lastID);
+  }
+
+  async deleteDashboard(id) {
+    const rows = await this._all(`SELECT COUNT(*) AS n FROM dashboards`);
+    if (rows[0].n <= 1) throw new Error("Cannot delete the last dashboard");
+    const res = await this._run(`DELETE FROM dashboards WHERE id = ?`, [id]);
+    return res.changes > 0;
+  }
+
+  /** Distinct tag names used by any dashboard panel (what the background poller samples). */
+  async getDashboardTagNames() {
+    const names = new Set();
+    for (const d of await this.listDashboards()) {
+      for (const p of d.config.panels || []) for (const s of p.series || []) names.add(s.name);
+    }
+    return [...names];
+  }
+
+  async getDashboardPollIntervalSec() {
+    const v = Number(await this.getSetting("dashboard_poll_interval_sec"));
+    return Number.isFinite(v) && v >= 2 ? v : 10;
+  }
+
+  async setDashboardPollIntervalSec(sec) {
+    const v = Number(sec);
+    if (!Number.isFinite(v) || v < 2 || v > 3600) throw new Error("Interval must be between 2 and 3600 seconds");
+    await this.setSetting("dashboard_poll_interval_sec", String(Math.round(v)));
+    return Math.round(v);
+  }
+
+  // ── Time-series queries & retention ─────────────────────────────────────
+  /**
+   * Downsampled history for one series. Recent data comes from `readings`,
+   * data older than the raw window from `readings_hourly`. Returns
+   * [[tMs, avg, min, max], …] with timestamps on a common bucket grid.
+   */
+  async querySeries({ name, ip = null, fromMs, toMs, maxPoints = 600, minBucketSec = 1 }) {
+    const rangeSec = Math.max(1, (toMs - fromMs) / 1000);
+    const bucketSec = Math.max(Math.ceil(minBucketSec), Math.ceil(rangeSec / Math.max(10, maxPoints)));
+    const fmt = (ms) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+    const rawCutoffMs = Date.now() - (await this.getRawRetentionDays()) * 86400000;
+    const points = new Map();
+
+    if (fromMs < rawCutoffMs) {
+      const hb = Math.max(3600, Math.ceil(bucketSec / 3600) * 3600);
+      const rows = await this._all(
+        `SELECT (hour / ?) * ? AS b, SUM(avg * count) / SUM(count) AS avg, MIN(min) AS min, MAX(max) AS max
+         FROM readings_hourly
+         WHERE name = ? AND (? IS NULL OR ip = ?) AND hour >= ? AND hour < ?
+         GROUP BY b`,
+        [hb, hb, name, ip, ip, Math.floor(fromMs / 1000), Math.floor(Math.min(toMs, rawCutoffMs) / 1000)]
+      );
+      for (const r of rows) points.set(r.b * 1000, [r.b * 1000, r.avg, r.min, r.max]);
+    }
+
+    const rawFrom = Math.max(fromMs, rawCutoffMs);
+    if (rawFrom < toMs) {
+      const rows = await this._all(
+        `SELECT (CAST(strftime('%s', timestamp) AS INTEGER) / ?) * ? AS b,
+                AVG(scaledValue) AS avg, MIN(scaledValue) AS min, MAX(scaledValue) AS max
+         FROM readings
+         WHERE name = ? AND (? IS NULL OR ip = ?) AND scaledValue IS NOT NULL
+           AND timestamp >= ? AND timestamp <= ?
+         GROUP BY b`,
+        [bucketSec, bucketSec, name, ip, ip, fmt(rawFrom), fmt(toMs)]
+      );
+      for (const r of rows) points.set(r.b * 1000, [r.b * 1000, r.avg, r.min, r.max]);
+    }
+    return [...points.values()].sort((a, b) => a[0] - b[0]);
+  }
+
+  async getRawRetentionDays() {
+    const v = Number(await this.getSetting("raw_retention_days"));
+    return Number.isFinite(v) && v >= 1 ? v : 7;
+  }
+
+  /**
+   * Roll raw readings older than the retention window up into hourly
+   * avg/min/max rows, then delete them. Safe to run repeatedly.
+   */
+  async rollupAndPrune() {
+    const days = await this.getRawRetentionDays();
+    const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 19).replace("T", " ");
+    // Only whole hours below the cutoff, so a partial hour is never rolled up twice.
+    await this._run(
+      `INSERT INTO readings_hourly (ip, name, hour, avg, min, max, count)
+       SELECT ip, name, (CAST(strftime('%s', timestamp) AS INTEGER) / 3600) * 3600 AS h,
+              AVG(scaledValue), MIN(scaledValue), MAX(scaledValue), COUNT(*)
+       FROM readings
+       WHERE name IS NOT NULL AND scaledValue IS NOT NULL AND timestamp < ?
+         AND h < (CAST(strftime('%s', ?) AS INTEGER) / 3600) * 3600
+       GROUP BY ip, name, h
+       ON CONFLICT(ip, name, hour) DO UPDATE SET
+         avg = (avg * count + excluded.avg * excluded.count) / (count + excluded.count),
+         min = MIN(min, excluded.min), max = MAX(max, excluded.max),
+         count = count + excluded.count`,
+      [cutoff, cutoff]
+    );
+    const del = await this._run(
+      `DELETE FROM readings WHERE timestamp < ? AND name IS NOT NULL
+         AND (CAST(strftime('%s', timestamp) AS INTEGER) / 3600) * 3600 < (CAST(strftime('%s', ?) AS INTEGER) / 3600) * 3600`,
+      [cutoff, cutoff]
+    );
+    return { pruned: del.changes };
   }
 
   /**

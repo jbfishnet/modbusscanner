@@ -38,6 +38,20 @@ docker pull DOCKERHUB_USERNAME/modbusscanner:latest
 
 Replace the placeholders with the GitHub owner and Docker Hub username.
 
+## Desktop App (Electron)
+
+The server also runs as a self-contained desktop app, with the same UI in a native window instead of a browser tab.
+
+```bash
+npm install
+npm run electron:rebuild   # rebuild sqlite3 for Electron's Node ABI (once per Electron/Node version)
+npm run electron           # launch it
+```
+
+On first launch it copies the bundled `modbus.yaml` into the app's user data directory so edits survive updates; set `MODBUS_YAML_PATH` to point it elsewhere.
+
+Build installers with `npm run dist` (uses `electron-builder`; see the `build` key in `package.json` for per-platform icons and the GitHub Releases publish target).
+
 Run the local checks with:
 
 ```bash
@@ -116,3 +130,13 @@ PORT=3000 npm start
 ## Scan Targets
 
 The first start shows an empty target list, so no device is contacted implicitly. Add at least one IP address, port, and unit ID in the web UI. Targets are checked when saved and persisted in `modbus_readings.db`; all scan modes process the saved targets sequentially.
+
+## Dashboard
+
+The **Dashboard** tab is a Grafana-style panel grid. Everything is persisted in SQLite, so it survives reloads and restarts.
+
+- **Dashboards & panels** are stored as JSON (`dashboards` table). Panel types: time series (line, smooth, step, area, points), stat, gauge and table. Use **+ Add panel**, or the **+** button in the YAML register table to pin a register.
+- **History** is sampled by a background poller on the server (default every 10 s, configurable under *Sample every*), independent of any open browser. Panels query it through `POST /api/query` with server-side downsampling.
+- **Retention:** raw readings are kept for 7 days (`raw_retention_days` setting), then rolled up to hourly avg/min/max (`readings_hourly`) and pruned.
+- **Axes** auto-scale to round bounds with unit-aware labels: SI prefixes for `W`, `Wh`, `A`, `V`, `Pa`, … (`1.5 kW`), plain `°C` / `%`, and compact `K`/`M` for unit-less values. Series with different units get separate left/right axes. Min/max can be fixed per panel.
+- Frontend code lives in `web/` (uPlot is vendored in `web/vendor/`, so it works offline).

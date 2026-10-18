@@ -6,6 +6,13 @@ const path = require("path");
 const { normalizeTarget } = require("./validation");
 const { isTrustedOrigin } = require("./security");
 const config = require("./config");
+const { sanitizeDashboard } = require("./dashboardConfig");
+
+const WEB_DIR = path.resolve(__dirname, "..", "web");
+const STATIC_TYPES = {
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+};
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, { "Content-Type": "application/json" });
@@ -72,7 +79,7 @@ function testTargetAccess(target) {
 // Builds the (req, res) => void handler passed to http.createServer().
 // `dataStore` is injected rather than required directly so this module has
 // no hidden dependency on a specific DataStore instance/lifecycle.
-function createHttpHandler({ dataStore }) {
+function createHttpHandler({ dataStore, onDashboardSettingsChanged }) {
   async function handleExportCSV(url, res) {
     try {
       const tagName = url.searchParams.get("tag");
@@ -177,26 +184,88 @@ function createHttpHandler({ dataStore }) {
     }
   }
 
-  async function handleGetDashboardConfig(res) {
-    try {
-      sendJson(res, 200, { tags: await dataStore.getDashboardConfig() });
-    } catch (err) {
-      sendJson(res, 500, { error: err.message });
-    }
+  const MAX_QUERY_SERIES = 32;
+  const MAX_RANGE_MS = 366 * 24 * 3600 * 1000;
+
+  function respond(res, fn) {
+    return Promise.resolve()
+      .then(fn)
+      .then((payload) => sendJson(res, 200, payload))
+      .catch((err) => sendJson(res, err.status || 400, { error: err.message }));
   }
 
-  async function handleSaveDashboardConfig(req, res) {
-    try {
+  const handleListDashboards = (res) =>
+    respond(res, async () => ({ dashboards: await dataStore.listDashboards() }));
+
+  const handleSaveDashboard = (req, res) =>
+    respond(res, async () => {
       const payload = await readJsonBody(req);
-      if (!Array.isArray(payload.tags)) {
-        throw new Error("tags must be an array of tag names");
+      const clean = sanitizeDashboard(payload);
+      const id = payload.id === undefined || payload.id === null ? null : Number(payload.id);
+      if (id !== null && !Number.isInteger(id)) throw new Error("Invalid dashboard id");
+      return { dashboard: await dataStore.saveDashboard({ id, ...clean }) };
+    });
+
+  const handleDeleteDashboard = (url, res) =>
+    respond(res, async () => {
+      const id = Number(url.searchParams.get("id"));
+      if (!Number.isInteger(id)) throw new Error("Invalid dashboard id");
+      await dataStore.deleteDashboard(id);
+      return { ok: true };
+    });
+
+  // POST body: { series: [{name, ip?}], from, to (ms epoch), maxPoints? }
+  const handleQuery = (req, res) =>
+    respond(res, async () => {
+      const body = await readJsonBody(req);
+      const series = Array.isArray(body.series) ? body.series.slice(0, MAX_QUERY_SERIES) : [];
+      const toMs = Number.isFinite(Number(body.to)) ? Number(body.to) : Date.now();
+      const fromMs = Number.isFinite(Number(body.from)) ? Number(body.from) : toMs - 3600 * 1000;
+      if (fromMs >= toMs || toMs - fromMs > MAX_RANGE_MS) throw new Error("Invalid time range");
+      const maxPoints = Math.min(2000, Math.max(10, Number(body.maxPoints) || 600));
+      const minBucketSec = await dataStore.getDashboardPollIntervalSec();
+      const out = [];
+      for (const s of series) {
+        if (!s || typeof s.name !== "string") continue;
+        out.push({
+          name: s.name,
+          ip: s.ip || null,
+          points: await dataStore.querySeries({ name: s.name, ip: s.ip || null, fromMs, toMs, maxPoints, minBucketSec }),
+        });
       }
-      const tags = await dataStore.saveDashboardConfig(payload.tags);
-      sendJson(res, 200, { tags });
-    } catch (err) {
-      sendJson(res, 400, { error: err.message });
+      return { from: fromMs, to: toMs, series: out };
+    });
+
+  const handleGetDashboardSettings = (res) =>
+    respond(res, async () => ({ pollIntervalSec: await dataStore.getDashboardPollIntervalSec() }));
+
+  const handleSaveDashboardSettings = (req, res) =>
+    respond(res, async () => {
+      const body = await readJsonBody(req);
+      const pollIntervalSec = await dataStore.setDashboardPollIntervalSec(body.pollIntervalSec);
+      if (onDashboardSettingsChanged) onDashboardSettingsChanged();
+      return { pollIntervalSec };
+    });
+
+  const handleStatic = (url, res) => {
+    const rel = decodeURIComponent(url.pathname).replace(/^\/web\//, "");
+    const filePath = path.resolve(WEB_DIR, rel);
+    const type = STATIC_TYPES[path.extname(filePath)];
+    if (!type || !filePath.startsWith(WEB_DIR + path.sep)) {
+      res.writeHead(404);
+      res.end("Not found");
+      return;
     }
-  }
+    fs.readFile(filePath, (err, data) => {
+      if (err) {
+        res.writeHead(404);
+        res.end("Not found");
+      } else {
+        res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-cache" });
+        res.end(data);
+      }
+    });
+  };
 
   const routes = [
     { method: "GET", path: "/", handle: serveIndex },
@@ -209,8 +278,12 @@ function createHttpHandler({ dataStore }) {
     { method: "GET", path: "/api/bootstrap", handle: (req, res) => handleBootstrap(res) },
     { method: "GET", path: "/api/scan-targets", handle: (req, res) => handleGetScanTargets(res) },
     { method: "POST", path: "/api/scan-targets", handle: handleSaveScanTargets },
-    { method: "GET", path: "/api/dashboard-config", handle: (req, res) => handleGetDashboardConfig(res) },
-    { method: "POST", path: "/api/dashboard-config", handle: handleSaveDashboardConfig },
+    { method: "GET", path: "/api/dashboards", handle: (req, res) => handleListDashboards(res) },
+    { method: "POST", path: "/api/dashboards", handle: handleSaveDashboard },
+    { method: "DELETE", path: "/api/dashboards", handle: (req, res, url) => handleDeleteDashboard(url, res) },
+    { method: "POST", path: "/api/query", handle: handleQuery },
+    { method: "GET", path: "/api/dashboard-settings", handle: (req, res) => handleGetDashboardSettings(res) },
+    { method: "POST", path: "/api/dashboard-settings", handle: handleSaveDashboardSettings },
   ];
 
   return function handleRequest(req, res) {
@@ -221,6 +294,10 @@ function createHttpHandler({ dataStore }) {
     }
 
     const url = new URL(req.url, `http://${req.headers.host}`);
+    if (req.method === "GET" && url.pathname.startsWith("/web/")) {
+      handleStatic(url, res);
+      return;
+    }
     const route = routes.find((r) => r.method === req.method && r.path === url.pathname);
 
     if (!route) {

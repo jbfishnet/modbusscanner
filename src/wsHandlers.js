@@ -6,11 +6,8 @@ const logger = require("./logger");
 const { validateScanMessage } = require("./validation");
 const {
   readRegisters,
-  readHoldingWords,
-  combineWords,
-  applyScale,
+  readYamlReading,
   sanityCheck,
-  sanityCheckYaml,
   sleep,
   isProtocolException,
   connectWithRetry,
@@ -146,46 +143,7 @@ async function handleScanYaml(ws, msg, activeSessions, { dataStore }) {
       for (const regDef of yamlRegisters) {
         if (session.cancelled) break;
 
-        const qty = regDef.data_type === "int32" ? 2 : 1;
-        let rawWords;
-        try {
-          rawWords = await readHoldingWords(client, regDef.address, qty);
-        } catch (err) {
-          const reading = {
-            type: "result",
-            register: regDef.address,
-            name: regDef.name,
-            section: regDef.section,
-            unit: regDef.unit,
-            value: null,
-            raw: null,
-            scaledValue: null,
-            dataType: regDef.data_type,
-            sanity: { status: "error", reason: err.message },
-          };
-          send(reading);
-          await recordReading(reading);
-          done++;
-          send({ type: "progress", done, total });
-          await sleep(config.SCAN_STEP_DELAY_MS);
-          continue;
-        }
-
-        const rawInt = combineWords(rawWords, regDef.data_type);
-        const scaled = applyScale(rawInt, regDef.scale, regDef.precision);
-
-        const reading = {
-          type: "result",
-          register: regDef.address,
-          name: regDef.name,
-          section: regDef.section,
-          unit: regDef.unit,
-          value: rawInt,
-          raw: rawWords[0],
-          scaledValue: scaled,
-          dataType: regDef.data_type,
-          sanity: sanityCheckYaml(scaled, rawInt, regDef),
-        };
+        const reading = await readYamlReading(client, regDef);
         send(reading);
         await recordReading(reading);
 

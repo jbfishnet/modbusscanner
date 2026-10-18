@@ -46,8 +46,17 @@ function deriveSection(name) {
   return "Other";
 }
 
+// The packaged Electron app copies its bundled default modbus.yaml to a
+// writable per-user location on first run (its install directory is
+// read-only-ish and gets replaced on update) and points this at that copy;
+// the plain Node/Docker path leaves it unset and gets the file next to the
+// server, as before.
+function getYamlPath() {
+  return process.env.MODBUS_YAML_PATH || path.join(__dirname, "..", "modbus.yaml");
+}
+
 async function loadYamlConfig() {
-  const yamlPath = path.join(__dirname, "..", "modbus.yaml");
+  const yamlPath = getYamlPath();
   let raw;
   try {
     raw = await fs.promises.readFile(yamlPath, "utf8");
@@ -107,4 +116,5 @@ module.exports = {
   TARGET_TEST_TIMEOUT_MS,
   loadYamlConfig,
   getYamlRegisters,
+  getYamlPath,
 };

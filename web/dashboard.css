@@ -1,0 +1,73 @@
+/* Dashboard tab. Uses the app's :root tokens (--surface, --border, --text, --muted, --accent). */
+#dashboardWrap { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+.dash-shell { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.dash-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dash-toolbar .spacer { flex: 1; }
+.dash-toolbar label { font-size: .7rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.dash-toolbar select, .dash-toolbar input, .dash-dialog select, .dash-dialog input {
+  background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 8px; font: inherit; font-size: .78rem;
+}
+.dash-toolbar select, .dash-dialog select { width: auto; }
+.dash-toolbar input[type=number] { width: 64px; }
+.dash-btn {
+  background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 10px; font: inherit; font-size: .78rem; cursor: pointer;
+}
+.dash-btn:hover { border-color: var(--accent); }
+.dash-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.dash-btn.danger:hover { border-color: var(--err); color: #fca5a5; }
+.dash-btn:disabled { opacity: .45; cursor: default; }
+
+.dash-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; }
+.dash-empty { grid-column: 1 / -1; text-align: center; color: var(--muted); padding: 48px 0; font-size: .85rem; }
+.dash-panel {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  display: flex; flex-direction: column; min-width: 0; overflow: hidden;
+}
+.dash-panel-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px 0; }
+.dash-panel-title { font-size: .8rem; font-weight: 600; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-icon {
+  background: none; border: none; color: var(--muted); cursor: pointer; border-radius: 4px;
+  padding: 2px 6px; font-size: .85rem; line-height: 1;
+}
+.dash-icon:hover { color: var(--text); background: var(--surface2); }
+.dash-panel-body { position: relative; flex: 1; min-height: 0; padding: 6px 8px 8px; overflow: auto; }
+.dash-msg {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: .78rem; text-align: center; padding: 16px; pointer-events: none;
+}
+
+/* uPlot theming for the dark surface */
+.dash-panel .uplot { font-family: inherit; }
+.dash-panel .u-legend { font-size: .7rem; color: var(--muted); text-align: left; padding-top: 4px; }
+.dash-panel .u-legend .u-marker { border-radius: 2px; }
+.dash-panel .u-legend th { font-weight: 500; }
+.dash-panel .u-legend .u-value { color: var(--text); min-width: 5.5em; display: inline-block; text-align: right; }
+.dash-panel .u-select { background: rgba(59,130,246,.15); }
+
+/* stat / gauge / table panels */
+.dash-tiles { display: flex; flex-wrap: wrap; gap: 10px; height: 100%; align-content: stretch; }
+.dash-tile { flex: 1 1 120px; display: flex; flex-direction: column; justify-content: center; align-items: center; min-width: 0; }
+.dash-tile-label { font-size: .72rem; color: var(--muted); text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.dash-tile-value { font-size: 2rem; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.dash-tile svg { max-width: 100%; }
+.dash-table { width: 100%; border-collapse: collapse; font-size: .76rem; font-variant-numeric: tabular-nums; }
+.dash-table th { text-align: right; color: var(--muted); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.dash-table td { white-space: nowrap; text-align: right; padding: 4px 8px; border-bottom: 1px solid rgba(46,51,80,.5); }
+.dash-table th:first-child, .dash-table td:first-child { text-align: left; }
+.dash-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; }
+
+/* editor dialog */
+.dash-dialog { margin: auto; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 12px; padding: 0; width: min(720px, 94vw); box-shadow: var(--shadow); }
+.dash-dialog::backdrop { background: rgba(0,0,0,.6); }
+.dash-dialog form { display: flex; flex-direction: column; gap: 12px; padding: 16px; max-height: 86vh; overflow: auto; }
+.dash-dialog h3 { font-size: .95rem; }
+.dash-dialog fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.dash-dialog legend { font-size: .7rem; color: var(--muted); padding: 0 6px; text-transform: uppercase; letter-spacing: 1px; }
+.dash-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.dash-row label { font-size: .72rem; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+.dash-row input[type=color] { padding: 0; width: 34px; height: 28px; }
+.dash-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.dash-panel .u-legend .u-series:first-child { display: none; }

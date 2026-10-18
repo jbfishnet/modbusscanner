@@ -61,6 +61,37 @@ function sanityCheckYaml(scaled, rawInt, regDef) {
   return { status: "ok", reason: "" };
 }
 
+// Reads one YAML-defined register and returns the "result" reading object
+// used by both the interactive YAML scan and the dashboard poller. A failed
+// read yields a reading with null values and an "error" sanity status
+// instead of throwing.
+async function readYamlReading(client, regDef) {
+  const base = {
+    type: "result",
+    register: regDef.address,
+    name: regDef.name,
+    section: regDef.section,
+    unit: regDef.unit,
+    dataType: regDef.data_type,
+  };
+  const qty = regDef.data_type === "int32" ? 2 : 1;
+  let rawWords;
+  try {
+    rawWords = await readHoldingWords(client, regDef.address, qty);
+  } catch (err) {
+    return { ...base, value: null, raw: null, scaledValue: null, sanity: { status: "error", reason: err.message } };
+  }
+  const rawInt = combineWords(rawWords, regDef.data_type);
+  const scaled = applyScale(rawInt, regDef.scale, regDef.precision);
+  return {
+    ...base,
+    value: rawInt,
+    raw: rawWords[0],
+    scaledValue: scaled,
+    sanity: sanityCheckYaml(scaled, rawInt, regDef),
+  };
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -93,6 +124,7 @@ async function connectWithRetry(client, ip, port, unitId, { retries = 2, backoff
 module.exports = {
   readRegisters,
   readHoldingWords,
+  readYamlReading,
   combineWords,
   applyScale,
   sanityCheck,

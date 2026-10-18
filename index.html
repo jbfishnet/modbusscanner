@@ -4,7 +4,8 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Modbus TCP Scanner</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="/web/vendor/uPlot.min.css" />
+<link rel="stylesheet" href="/web/dashboard.css" />
 <style>
   /* ── Reset & Base ─────────────────────────────────────────── */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -249,76 +250,6 @@
     cursor: pointer; box-sizing: border-box;
   }
   .dashboard-add-btn:hover { filter: brightness(1.1); }
-
-  /* ── Dashboard ─────────────────────────────────────────────── */
-  #dashboardWrap {
-    background: linear-gradient(180deg, #0f172a 0%, #111827 100%);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow);
-  }
-  .dashboard-shell {
-    padding: 18px;
-    display: flex; flex-direction: column; gap: 16px;
-  }
-  .dashboard-header {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(148,163,184,0.2);
-  }
-  .dashboard-title {
-    font-size: .8rem; text-transform: uppercase; letter-spacing: 1.4px;
-    color: #94a3b8; font-weight: 700;
-  }
-  .dashboard-meta {
-    color: #cbd5e1; font-size: .72rem;
-  }
-  .dashboard-grid {
-    display: grid; grid-template-columns: minmax(0, 1fr);
-    gap: 16px;
-  }
-  .dashboard-panel {
-    background: rgba(15, 23, 42, 0.9);
-    border: 1px solid rgba(148,163,184,0.2);
-    border-radius: 12px;
-    padding: 14px 14px 10px;
-  }
-  .dashboard-panel-header {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 10px; margin-bottom: 10px;
-  }
-  .dashboard-panel-title {
-    font-size: .82rem; font-weight: 700; color: #e2e8f0;
-  }
-  .dashboard-panel-unit {
-    font-size: .72rem; color: #93c5fd; background: rgba(59,130,246,0.1);
-    border: 1px solid rgba(59,130,246,0.2); border-radius: 999px; padding: 4px 8px;
-  }
-  .dashboard-canvas-wrap {
-    position: relative; height: 280px; width: 100%;
-    background: radial-gradient(circle at top, rgba(59,130,246,0.08), rgba(15,23,42,0.2));
-    border-radius: 10px; overflow: hidden;
-    border: 1px solid rgba(148,163,184,0.12);
-  }
-  .dashboard-canvas-wrap canvas {
-    width: 100%; height: 100%; display: block;
-  }
-  .dashboard-series-list {
-    display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px;
-  }
-  .dashboard-series-chip {
-    display: inline-flex; align-items: center; gap: 6px;
-    background: rgba(148,163,184,0.1); border: 1px solid rgba(148,163,184,0.2);
-    border-radius: 999px; padding: 4px 6px 4px 10px;
-    font-size: .72rem; color: #e2e8f0;
-  }
-  .dashboard-series-chip .swatch {
-    width: 8px; height: 8px; border-radius: 50%; flex: none;
-  }
-  .dashboard-series-chip button {
-    background: none; border: none; color: #94a3b8; cursor: pointer;
-    font-size: .85rem; line-height: 1; padding: 2px 4px; border-radius: 4px;
-  }
-  .dashboard-series-chip button:hover { color: #f87171; background: rgba(248,113,113,0.12); }
 
   /* ── Toast ────────────────────────────────────────────────── */
   #toast {
@@ -591,35 +522,8 @@
       </table>
     </div>
 
-    <!-- Dashboard tab -->
-    <div class="table-wrap" id="dashboardWrap" style="display:none;">
-      <div class="dashboard-shell">
-        <div class="dashboard-header">
-          <div class="dashboard-title">Plant Overview</div>
-          <div class="dashboard-meta">Local monitoring dashboard</div>
-        </div>
-        <div class="dashboard-controls" style="display:flex; align-items:end; gap:12px; flex-wrap:wrap;">
-          <div class="field" style="margin:0; min-width:150px;">
-            <label for="dashboardIntervalSec">Sample every (sec)</label>
-            <input id="dashboardIntervalSec" type="number" min="1" max="3600" value="10" />
-          </div>
-          <button id="btnApplyDashboardInterval" class="btn-ghost" type="button">Apply</button>
-          <button id="btnDashboardRefresh" class="btn-primary" type="button" style="width:auto;">Refresh now</button>
-        </div>
-        <div class="dashboard-grid">
-          <div class="dashboard-panel">
-            <div class="dashboard-panel-header">
-              <div class="dashboard-panel-title">Live Metrics</div>
-              <div class="dashboard-panel-unit" id="dashboardSeriesCount">0 series</div>
-            </div>
-            <div class="dashboard-canvas-wrap">
-              <canvas id="dashboardSeriesChart"></canvas>
-            </div>
-            <div class="dashboard-series-list" id="dashboardSeriesList"></div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- Dashboard tab (rendered by web/dashboard.js) -->
+    <div class="table-wrap" id="dashboardWrap" style="display:none;"></div>
 
   </section>
 </main>
@@ -627,6 +531,9 @@
 <!-- Toast -->
 <div id="toast"></div>
 
+<script src="/web/vendor/uPlot.iife.min.js"></script>
+<script src="/web/dashboard-core.js"></script>
+<script src="/web/dashboard.js"></script>
 <script>
 "use strict";
 
@@ -647,11 +554,6 @@ let yamlRegCount = 0;
 let scanTargets = [];
 let scanQueue = [];
 let scanRequest = null;
-let dashboardSeries = {};
-let dashboardTimer = null;
-let dashboardIntervalMs = 10000;
-let dashboardChart = null;
-const DASHBOARD_PALETTE = ["#60a5fa", "#22c55e", "#f59e0b", "#a78bfa", "#f472b6"];
 let startupYamlScanStarted = false;
 
 // ── Tab switching ──────────────────────────────────────────────────────────────
@@ -678,18 +580,14 @@ function switchTab(tab) {
   document.getElementById("discoverTableWrap").style.display = tab === "discover" ? "" : "none";
   document.getElementById("dashboardWrap").style.display     = tab === "dashboard" ? "" : "none";
 
-  // The dashboard tab has its own chart + series list, not the generic
-  // stats/export panel (it previously read a hardcoded, near-always-
-  // undefined dashboardSeries.hp1FlowLineTemperature key here, which threw
-  // as soon as this tab was opened without that exact tag added; export
-  // would otherwise have silently fallen through to exporting discoverRows).
+  // The dashboard tab has its own panels, not the generic stats/export panel.
   if (tab === "dashboard") {
     document.getElementById("statsRow").style.display = "none";
     document.getElementById("btnExport").disabled = true;
-    renderDashboardChart();
-    renderDashboardSeriesList();
+    Dashboard.onShow();
     return;
   }
+  Dashboard.onHide();
 
   const s = tab === "raw" ? rawStats : tab === "yaml" ? yamlStats : discoverStats;
   renderStats(s);
@@ -737,6 +635,7 @@ function handleMsg(msg) {
 }
 
 function onConfig(msg) {
+  Dashboard.setRegisters(msg.registers || []);
   yamlRegCount = (msg.registers || []).length;
   document.getElementById("yamlRegCount").textContent = yamlRegCount;
 
@@ -1025,68 +924,10 @@ function onRawResult(msg) {
   appendRawRow(row);
 }
 
-function addTagToDashboard(tagName, { persist = true } = {}) {
-  if (!tagName || dashboardSeries[tagName]) return;
-  dashboardSeries[tagName] = { label: tagName.replace(/^EU\d+[A-Z]?_/, "").replace(/_/g, " "), points: [] };
-  if (activeTab !== "dashboard") {
-    toast(`Added ${dashboardSeries[tagName].label} to the dashboard.`);
-  }
-  renderDashboardChart();
-  if (persist) persistDashboardConfig();
-}
-
-// Not debounced: add/remove are discrete, infrequent user actions (one
-// click each), not a rapid stream — debouncing here would only risk
-// losing the save if the page/app closes shortly after the click, for no
-// real benefit. Rehydration on load (addTagToDashboard with persist:
-// false) doesn't call this at all, so it doesn't cause redundant saves.
-async function persistDashboardConfig() {
-  try {
-    const response = await fetch("/api/dashboard-config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tags: Object.keys(dashboardSeries) }),
-    });
-    if (!response.ok) throw new Error((await response.json()).error || "Save failed");
-  } catch (err) {
-    console.error("Failed to save dashboard config:", err.message);
-  }
-}
-
-// Only the chosen series (not their history) is persisted — the readings
-// table already retains history, and re-populating charts from it on
-// every load is a heavier feature than "remember which tags are pinned".
-async function loadDashboardConfig() {
-  try {
-    const response = await fetch("/api/dashboard-config");
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Could not load dashboard config");
-    (payload.tags || []).forEach((tagName) => addTagToDashboard(tagName, { persist: false }));
-  } catch (err) {
-    console.error("Could not load dashboard config:", err.message);
-  }
-}
-
-function removeTagFromDashboard(tagName) {
-  if (!dashboardSeries[tagName]) return;
-  delete dashboardSeries[tagName];
-  renderDashboardChart();
-  persistDashboardConfig();
-}
-
 function onYamlResult(msg) {
   const { register, name, section, scaledValue, unit, dataType, sanity } = msg;
   const row = { register, name, section, scaledValue, unit, dataType, sanity };
   yamlRows.push(row);
-
-  if (name && dashboardSeries[name]) {
-    const sample = Number.isFinite(Number(scaledValue)) ? Number(scaledValue) : null;
-    dashboardSeries[name].points.push({ time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }), value: sample });
-    if (dashboardSeries[name].points.length > 120) {
-      dashboardSeries[name].points = dashboardSeries[name].points.slice(-120);
-    }
-    renderDashboardChart();
-  }
 
   yamlStats.total++;
   if (sanity.status === "ok")        yamlStats.ok++;
@@ -1166,7 +1007,7 @@ function appendYamlRow(row) {
   `;
   const addButton = tr.querySelector(".dashboard-add-btn");
   if (addButton) {
-    addButton.addEventListener("click", () => addTagToDashboard(name));
+    addButton.addEventListener("click", () => Dashboard.addSeries(name));
   }
   body.appendChild(tr);
 }
@@ -1365,105 +1206,6 @@ function clearDiscoverData() {
   renderStats(discoverStats);
 }
 
-function ensureDashboardChart() {
-  if (dashboardChart) return dashboardChart;
-  const canvas = document.getElementById("dashboardSeriesChart");
-  if (!canvas) return null;
-
-  dashboardChart = new Chart(canvas.getContext("2d"), {
-    type: "line",
-    data: { datasets: [] },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      parsing: false,
-      scales: {
-        x: { type: "category", ticks: { color: "#94a3b8", maxRotation: 0 }, grid: { color: "rgba(148,163,184,0.15)" } },
-        y: { ticks: { color: "#94a3b8" }, grid: { color: "rgba(148,163,184,0.15)" } },
-      },
-      plugins: {
-        legend: { labels: { color: "#e2e8f0" } },
-      },
-    },
-  });
-  return dashboardChart;
-}
-
-function renderDashboardChart() {
-  const chart = ensureDashboardChart();
-  if (!chart) return;
-
-  const seriesEntries = Object.entries(dashboardSeries).filter(([, entry]) => (entry.points || []).length > 0);
-
-  chart.data.datasets = seriesEntries.map(([tagName, series], index) => ({
-    label: series.label,
-    tagName,
-    borderColor: DASHBOARD_PALETTE[index % DASHBOARD_PALETTE.length],
-    backgroundColor: DASHBOARD_PALETTE[index % DASHBOARD_PALETTE.length],
-    borderWidth: 2,
-    pointRadius: 0,
-    tension: 0.15,
-    data: series.points
-      .filter((point) => point.value !== null && Number.isFinite(point.value))
-      .map((point) => ({ x: point.time, y: Number(point.value) })),
-  }));
-
-  chart.update("none");
-  renderDashboardSeriesList();
-}
-
-function renderDashboardSeriesList() {
-  const list = document.getElementById("dashboardSeriesList");
-  const count = document.getElementById("dashboardSeriesCount");
-  if (!list) return;
-
-  const tagNames = Object.keys(dashboardSeries);
-  if (count) count.textContent = `${tagNames.length} series`;
-
-  list.innerHTML = "";
-  tagNames.forEach((tagName, index) => {
-    const chip = document.createElement("div");
-    chip.className = "dashboard-series-chip";
-    chip.innerHTML = `
-      <span class="swatch" style="background:${DASHBOARD_PALETTE[index % DASHBOARD_PALETTE.length]}"></span>
-      <span>${esc(dashboardSeries[tagName].label)}</span>
-      <button type="button" title="Remove" aria-label="Remove ${esc(dashboardSeries[tagName].label)} from dashboard">×</button>
-    `;
-    chip.querySelector("button").addEventListener("click", () => removeTagFromDashboard(tagName));
-    list.appendChild(chip);
-  });
-}
-
-const MIN_DASHBOARD_INTERVAL_SEC = 2;
-
-function applyDashboardInterval() {
-  const value = Number(document.getElementById("dashboardIntervalSec").value);
-  if (!Number.isFinite(value) || value < MIN_DASHBOARD_INTERVAL_SEC) {
-    toast(`Dashboard interval must be at least ${MIN_DASHBOARD_INTERVAL_SEC} seconds.`, true);
-    return;
-  }
-
-  dashboardIntervalMs = value * 1000;
-  startDashboardCollection();
-  toast(`Dashboard refresh interval set to ${value} seconds.`);
-}
-
-function startDashboardCollection() {
-  if (dashboardTimer) {
-    clearInterval(dashboardTimer);
-    dashboardTimer = null;
-  }
-
-  if (dashboardIntervalMs > 0) {
-    dashboardTimer = setInterval(() => {
-      if (scanTargets.length > 0 && !scanning && Object.keys(dashboardSeries).length > 0) {
-        startQueuedScan("scan_yaml", {}, null);
-      }
-    }, dashboardIntervalMs);
-  }
-}
-
 function renderStats(s) {
   document.getElementById("statTotal").textContent = s.total;
   document.getElementById("statOk").textContent    = s.ok;
@@ -1501,19 +1243,6 @@ document.getElementById("btnScanYaml").addEventListener("click", startYamlScan);
 document.getElementById("btnScanDiscover").addEventListener("click", startDiscover);
 document.getElementById("btnCancel").addEventListener("click", cancelScan);
 document.getElementById("btnSaveTargets").addEventListener("click", saveScanTargets);
-document.getElementById("btnApplyDashboardInterval").addEventListener("click", applyDashboardInterval);
-document.getElementById("btnDashboardRefresh").addEventListener("click", () => {
-  if (scanTargets.length > 0) startQueuedScan("scan_yaml", {}, null);
-  else toast("Add a scan target before refreshing the dashboard.", true);
-});
-// Chart.js's own responsive:true handles resizing; a manual redraw here
-// is unnecessary. Do stop the polling interval on unload, though — mostly
-// moot in a plain browser tab, but matters once this runs inside an
-// Electron window that can be closed without a full page navigation.
-window.addEventListener("beforeunload", () => {
-  if (dashboardTimer) clearInterval(dashboardTimer);
-});
-startDashboardCollection();
 
 // ── Custom sanity check (raw tab) ──────────────────────────────────────────────
 document.getElementById("sanMin").addEventListener("change", revalidateRawTable);
@@ -1548,7 +1277,7 @@ function revalidateRawTable() {
 // ── Auto-connect ───────────────────────────────────────────────────────────────
 connect();
 loadScanTargets();
-loadDashboardConfig();
+Dashboard.init();
 </script>
 </body>
 </html>
