@@ -4,6 +4,8 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Modbus TCP Scanner</title>
+<link rel="stylesheet" href="/web/vendor/uPlot.min.css" />
+<link rel="stylesheet" href="/web/dashboard.css" />
 <style>
   /* ── Reset & Base ─────────────────────────────────────────── */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -102,6 +104,14 @@
   input::placeholder { color: var(--null); }
 
   .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .target-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .target-row { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 9px; }
+  .target-row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .target-address { font-weight: 700; font-size: .82rem; }
+  .target-meta { color: var(--muted); font-size: .72rem; margin-top: 3px; }
+  .target-error { color: var(--err); font-size: .7rem; margin-top: 5px; }
+  .target-empty { color: var(--muted); font-size: .78rem; line-height: 1.5; }
+  .btn-small { padding: 5px 8px; font-size: .72rem; }
 
   /* ── Buttons ──────────────────────────────────────────────── */
   button {
@@ -232,6 +242,15 @@
   .pill-coil     { background: rgba(34,197,94,.12);   color: #4ade80; border: 1px solid rgba(34,197,94,.25); }
   .pill-discrete { background: rgba(245,158,11,.12);  color: #fbbf24; border: 1px solid rgba(245,158,11,.25); }
   .discover-phase { font-size: .72rem; color: var(--muted); font-style: italic; }
+  .dashboard-add-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; padding: 0; margin-left: auto;
+    background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.25);
+    color: #bfdbfe; border-radius: 6px; font-size: 1rem; line-height: 1; font-weight: 700;
+    cursor: pointer; box-sizing: border-box;
+  }
+  .dashboard-add-btn:hover { filter: brightness(1.1); }
+  .dashboard-add-btn.pinned { background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.35); color: #86efac; }
 
   /* ── Toast ────────────────────────────────────────────────── */
   #toast {
@@ -279,6 +298,7 @@
   <button class="tab-btn active" id="tabRaw"      onclick="switchTab('raw')">🔬&nbsp; Raw Scan</button>
   <button class="tab-btn"        id="tabYaml"     onclick="switchTab('yaml')">📋&nbsp; YAML Registers</button>
   <button class="tab-btn"        id="tabDiscover" onclick="switchTab('discover')">🌐&nbsp; Discover All</button>
+  <button class="tab-btn"        id="tabDashboard" onclick="switchTab('dashboard')">📊&nbsp; Dashboard</button>
 </div>
 
 <!-- ── Main layout ───────────────────────────────────────────────────────── -->
@@ -289,21 +309,25 @@
 
     <!-- Connection card (shared) -->
     <div class="card">
-      <div class="card-title">Connection</div>
+      <div class="card-title">Scan Targets</div>
+      <div id="targetList" class="target-list">
+        <div class="target-empty" id="targetEmpty">Add at least one Modbus device before starting a scan.</div>
+      </div>
       <div class="field">
-        <label for="ip">IP Address</label>
-        <input id="ip" type="text" value="192.168.1.40" placeholder="192.168.1.40" />
+        <label for="targetIp">IP Address</label>
+        <input id="targetIp" type="text" placeholder="Enter device IP address" />
       </div>
       <div class="field-row">
         <div class="field">
-          <label for="port">Port</label>
-          <input id="port" type="number" value="502" min="1" max="65535" />
+          <label for="targetPort">Port</label>
+          <input id="targetPort" type="number" value="502" min="1" max="65535" />
         </div>
         <div class="field">
-          <label for="unitId">Unit ID</label>
-          <input id="unitId" type="number" value="1" min="0" max="255" />
+          <label for="targetUnitId">Unit ID</label>
+          <input id="targetUnitId" type="number" value="1" min="0" max="255" />
         </div>
       </div>
+      <button id="btnSaveTargets" class="btn-primary" type="button">＋ Save and test target</button>
     </div>
 
     <!-- Raw scan parameters (shown in raw tab) -->
@@ -365,6 +389,7 @@
       <p style="font-size:.72rem;color:var(--muted);margin-top:12px;">
         Values are scaled, typed (int16/uint16/int32), and include per-unit sanity checks.
       </p>
+      <p id="yamlSnapshotNote" style="font-size:.72rem;color:var(--muted);margin-top:8px;"></p>
     </div>
 
     <!-- Discover info card (shown in discover tab) -->
@@ -383,9 +408,9 @@
 
     <!-- Actions (mode-dependent buttons) -->
     <div style="display:flex;flex-direction:column;gap:8px;">
-      <button id="btnScan"        class="btn-primary">▶&nbsp; Start Scan</button>
-      <button id="btnScanYaml"    class="btn-primary" style="display:none;">▶&nbsp; Scan YAML Registers</button>
-      <button id="btnScanDiscover" class="btn-primary" style="display:none;">🌐&nbsp; Discover All Registers</button>
+      <button id="btnScan"        class="btn-primary" disabled>▶&nbsp; Start Scan</button>
+      <button id="btnScanYaml"    class="btn-primary" style="display:none;" disabled>↻&nbsp; Refresh YAML values</button>
+      <button id="btnScanDiscover" class="btn-primary" style="display:none;" disabled>🌐&nbsp; Discover All Registers</button>
       <button id="btnCancel"      class="btn-danger" disabled>⏹&nbsp; Cancel</button>
     </div>
 
@@ -457,7 +482,7 @@
           <rect x="20" y="30" width="18" height="3" rx="1.5" fill="#94a3b8"/>
           <rect x="20" y="38" width="21" height="3" rx="1.5" fill="#94a3b8"/>
         </svg>
-        <p>Press <strong>Scan YAML Registers</strong> to read all named registers</p>
+        <p>Values appear here as soon as the server has read them in the background</p>
       </div>
       <table id="yamlTable" style="display:none;">
         <thead>
@@ -499,12 +524,18 @@
       </table>
     </div>
 
+    <!-- Dashboard tab (rendered by web/dashboard.js) -->
+    <div class="table-wrap" id="dashboardWrap" style="display:none;"></div>
+
   </section>
 </main>
 
 <!-- Toast -->
 <div id="toast"></div>
 
+<script src="/web/vendor/uPlot.iife.min.js"></script>
+<script src="/web/dashboard-core.js"></script>
+<script src="/web/dashboard.js"></script>
 <script>
 "use strict";
 
@@ -522,15 +553,19 @@ let yamlStats     = { total: 0, ok: 0, warn: 0, err: 0 };
 let discoverStats = { total: 0, ok: 0, warn: 0, err: 0 };
 
 let yamlRegCount = 0;
+let scanTargets = [];
+let scanQueue = [];
+let scanRequest = null;
+let yamlRefreshing = false;
 
 // ── Tab switching ──────────────────────────────────────────────────────────────
 function switchTab(tab) {
-  if (scanning) { toast("Stop the scan before switching tabs.", true); return; }
   activeTab = tab;
 
   document.getElementById("tabRaw").classList.toggle("active",      tab === "raw");
   document.getElementById("tabYaml").classList.toggle("active",     tab === "yaml");
   document.getElementById("tabDiscover").classList.toggle("active", tab === "discover");
+  document.getElementById("tabDashboard").classList.toggle("active", tab === "dashboard");
 
   document.getElementById("rawParamsCard").style.display     = tab === "raw"      ? "" : "none";
   document.getElementById("rawSanityCard").style.display     = tab === "raw"      ? "" : "none";
@@ -544,6 +579,17 @@ function switchTab(tab) {
   document.getElementById("rawTableWrap").style.display      = tab === "raw"      ? "" : "none";
   document.getElementById("yamlTableWrap").style.display     = tab === "yaml"     ? "" : "none";
   document.getElementById("discoverTableWrap").style.display = tab === "discover" ? "" : "none";
+  document.getElementById("dashboardWrap").style.display     = tab === "dashboard" ? "" : "none";
+
+  // The dashboard tab has its own panels, not the generic stats/export panel.
+  if (tab === "dashboard") {
+    document.getElementById("statsRow").style.display = "none";
+    document.getElementById("btnExport").disabled = true;
+    Dashboard.onShow();
+    return;
+  }
+  Dashboard.onHide();
+  if (tab === "yaml") loadYamlSnapshot();
 
   const s = tab === "raw" ? rawStats : tab === "yaml" ? yamlStats : discoverStats;
   renderStats(s);
@@ -583,88 +629,337 @@ function handleMsg(msg) {
   if (msg.type === "config")    onConfig(msg);
   else if (msg.type === "result")    onResult(msg);
   else if (msg.type === "progress")  onProgress(msg);
-  else if (msg.type === "done")      endScan(false);
+  else if (msg.type === "done")      finishTarget(false);
   else if (msg.type === "error") {
     toast(msg.message, true);
-    endScan(true);
+    finishTarget(true);
   }
 }
 
 function onConfig(msg) {
+  Dashboard.setRegisters(msg.registers || []);
   yamlRegCount = (msg.registers || []).length;
   document.getElementById("yamlRegCount").textContent = yamlRegCount;
+}
+
+async function loadScanTargets() {
+  try {
+    let response = await fetch("/api/bootstrap");
+    let payload = await response.json();
+
+    if (!response.ok) {
+      response = await fetch("/api/scan-targets");
+      payload = await response.json();
+    }
+    if (!response.ok) throw new Error(payload.error || "Could not load scan targets");
+
+    scanTargets = payload.targets || [];
+    renderScanTargets();
+    loadYamlSnapshot();
+  } catch (err) {
+    toast("Could not load scan targets: " + err.message, true);
+  }
+}
+
+function getDraftTarget() {
+  const ip = document.getElementById("targetIp").value.trim();
+  if (!ip) return null;
+  return {
+    ip,
+    port: Number(document.getElementById("targetPort").value),
+    unitId: Number(document.getElementById("targetUnitId").value),
+  };
+}
+
+function hasEquivalentTarget(target) {
+  return scanTargets.some((saved) =>
+    saved.ip === target.ip &&
+    Number(saved.port) === Number(target.port) &&
+    Number(saved.unitId) === Number(target.unitId)
+  );
+}
+
+function renderScanTargets() {
+  const list = document.getElementById("targetList");
+  list.innerHTML = "";
+  if (scanTargets.length === 0) {
+    list.innerHTML = '<div class="target-empty">Add at least one Modbus device before starting a scan.</div>';
+  } else {
+    scanTargets.forEach((target, index) => {
+      const row = document.createElement("div");
+      row.className = "target-row";
+      const status = target.lastStatus === "reachable" ? "✓ reachable" : "⚠ not reachable";
+      row.innerHTML = `
+        <div class="target-row-head">
+          <div class="target-address">${esc(target.ip)} <span class="badge ${target.lastStatus === "reachable" ? "badge-ok" : "badge-err"}">${status}</span></div>
+          <button class="btn-ghost btn-small" type="button" data-target-index="${index}" title="Remove target">✕</button>
+        </div>
+        <div class="target-meta">Port ${esc(target.port)} · Unit ID ${esc(target.unitId)}</div>
+        ${target.lastError ? `<div class="target-error">${esc(target.lastError)}</div>` : ""}
+      `;
+      row.querySelector("button").addEventListener("click", () => removeScanTarget(index));
+      list.appendChild(row);
+    });
+  }
+
+  const hasTargets = scanTargets.length > 0;
+  const hasDraft = !!getDraftTarget();
+  ["btnScan", "btnScanDiscover"].forEach((id) => {
+    document.getElementById(id).disabled = (!hasTargets && !hasDraft) || scanning;
+  });
+  document.getElementById("btnScanYaml").disabled = (!hasTargets && !hasDraft) || yamlRefreshing;
+}
+
+async function persistDraftTarget() {
+  const draft = getDraftTarget();
+  if (!draft) return false;
+  if (hasEquivalentTarget(draft)) {
+    document.getElementById("targetIp").value = "";
+    renderScanTargets();
+    return true;
+  }
+
+  const nextTargets = [...scanTargets, draft];
+  try {
+    const response = await fetch("/api/scan-targets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targets: nextTargets }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not save scan target");
+
+    scanTargets = payload.targets || [];
+    document.getElementById("targetIp").value = "";
+    renderScanTargets();
+
+    const saved = scanTargets[scanTargets.length - 1];
+    toast(saved.lastStatus === "reachable"
+      ? `${saved.ip} is reachable and saved.`
+      : `${saved.ip} saved, but access failed: ${saved.lastError}`,
+      saved.lastStatus !== "reachable");
+    return true;
+  } catch (err) {
+    toast("Could not save target: " + err.message, true);
+    return false;
+  }
+}
+
+async function saveScanTargets() {
+  const draft = getDraftTarget();
+  if (!draft) {
+    toast("Enter an IP address before saving.", true);
+    return;
+  }
+
+  await persistDraftTarget();
+}
+
+async function removeScanTarget(index) {
+  if (scanTargets.length === 1) {
+    toast("At least one scan target is required.", true);
+    return;
+  }
+  const nextTargets = scanTargets.filter((_, targetIndex) => targetIndex !== index);
+  try {
+    const response = await fetch("/api/scan-targets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targets: nextTargets }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not remove scan target");
+    scanTargets = payload.targets || [];
+    renderScanTargets();
+  } catch (err) {
+    toast("Could not remove target: " + err.message, true);
+  }
 }
 
 // ── Scan controls ──────────────────────────────────────────────────────────────
 async function startScan() {
   if (scanning) return;
 
-  const ip       = document.getElementById("ip").value.trim();
-  const port     = parseInt(document.getElementById("port").value) || 502;
-  const unitId   = parseInt(document.getElementById("unitId").value) || 1;
   const regType  = document.getElementById("regType").value;
   const startReg = parseInt(document.getElementById("startReg").value) || 0;
   const count    = parseInt(document.getElementById("count").value) || 100;
   const batchSize= parseInt(document.getElementById("batchSize").value) || 10;
-
-  if (!ip) { toast("Please enter a valid IP address.", true); return; }
-
-  try { await ensureWs(); }
-  catch (err) { toast("Cannot connect to scanner server: " + err.message, true); return; }
-
-  clearRawData();
-  beginScan();
-  ws.send(JSON.stringify({ type: "scan", id: scanId, ip, port, unitId, regType, startReg, count, batchSize }));
+  await startQueuedScan("scan", { regType, startReg, count, batchSize }, clearRawData);
 }
 
+// The YAML tab never reads Modbus from the browser: the server's background
+// poller keeps a snapshot of every register. This button just asks it to
+// refresh now; nothing here blocks tab switches or other scans.
 async function startYamlScan() {
-  if (scanning) return;
+  if (yamlRefreshing) return;
   if (yamlRegCount === 0) { toast("No YAML registers loaded. Ensure modbus.yaml is present on the server.", true); return; }
+  if (scanTargets.length === 0 && !getDraftTarget()) { toast("Add at least one scan target first.", true); return; }
+  if (getDraftTarget() && !(await persistDraftTarget())) return;
 
-  const ip     = document.getElementById("ip").value.trim();
-  const port   = parseInt(document.getElementById("port").value) || 502;
-  const unitId = parseInt(document.getElementById("unitId").value) || 1;
-
-  if (!ip) { toast("Please enter a valid IP address.", true); return; }
-
-  try { await ensureWs(); }
-  catch (err) { toast("Cannot connect to scanner server: " + err.message, true); return; }
-
-  clearYamlData();
-  beginScan();
-  ws.send(JSON.stringify({ type: "scan_yaml", id: scanId, ip, port, unitId }));
+  yamlRefreshing = true;
+  renderScanTargets();
+  document.getElementById("btnScanYaml").textContent = "Reading…";
+  try {
+    const response = await fetch("/api/yaml-snapshot/refresh", { method: "POST" });
+    const snap = await response.json();
+    if (!response.ok) throw new Error(snap.error || "Refresh failed");
+    renderYamlSnapshot(snap);
+  } catch (err) {
+    toast("Could not refresh YAML values: " + err.message, true);
+  } finally {
+    yamlRefreshing = false;
+    document.getElementById("btnScanYaml").innerHTML = "↻&nbsp; Refresh YAML values";
+    renderScanTargets();
+  }
 }
+
+async function loadYamlSnapshot() {
+  try {
+    const response = await fetch("/api/yaml-snapshot");
+    if (response.ok) renderYamlSnapshot(await response.json());
+  } catch { /* server restarting; next tick retries */ }
+}
+
+function renderYamlSnapshot(snap) {
+  const rows = (snap.rows || []).map((r) => ({
+    ip: r.ip, register: r.register, name: r.name, section: r.section,
+    scaledValue: r.scaledValue, unit: r.unit, dataType: r.dataType, sanity: r.sanity || { status: "error", reason: "" },
+  }));
+
+  const note = [];
+  if (snap.updatedAt) note.push(`Updated ${new Date(snap.updatedAt).toLocaleTimeString()} · read by the server in the background`);
+  else note.push(scanTargets.length ? "Waiting for the first background read…" : "Add a Modbus device to start reading.");
+  (snap.errors || []).forEach((e) => note.push(`${e.ip}: ${e.message}`));
+  document.getElementById("yamlSnapshotNote").textContent = note.join(" · ");
+
+  const key = (r) => `${r.ip}|${r.name}`;
+  const sameLayout = rows.length === yamlRows.length && rows.every((r, i) => key(r) === key(yamlRows[i]));
+  yamlRows = rows;
+  yamlStats = { total: rows.length, ok: 0, warn: 0, err: 0 };
+  rows.forEach((r) => {
+    if (r.sanity.status === "ok") yamlStats.ok++;
+    else if (r.sanity.status === "warn") yamlStats.warn++;
+    else yamlStats.err++;
+  });
+
+  const body = document.getElementById("yamlBody");
+  if (sameLayout) {
+    // Update cells in place so a click on "+" is never lost to a re-render.
+    const trs = body.querySelectorAll("tr:not(.section-header)");
+    rows.forEach((r, i) => {
+      const tr = trs[i];
+      const val = r.scaledValue !== null && r.scaledValue !== undefined ? String(r.scaledValue) : "—";
+      tr.dataset.value = val;
+      tr.dataset.sanity = r.sanity.status;
+      tr.querySelector(".scaled-val").textContent = val;
+      const badge = tr.querySelector(".badge");
+      if (badge) badge.outerHTML = badgeHtml(r.sanity);
+    });
+  } else {
+    body.innerHTML = "";
+    currentSection = null;
+    rows.forEach(appendYamlRow);
+  }
+  document.getElementById("yamlEmptyState").style.display = rows.length ? "none" : "";
+  document.getElementById("yamlTable").style.display = rows.length ? "" : "none";
+  applyFilter();
+  syncPinButtons();
+
+  if (activeTab === "yaml") {
+    renderStats(yamlStats);
+    document.getElementById("statsRow").style.display = rows.length ? "" : "none";
+    document.getElementById("btnExport").disabled = rows.length === 0;
+  }
+}
+
+// Keep the YAML tab's values fresh while it is visible (a plain GET; never blocks anything).
+setInterval(() => { if (activeTab === "yaml") loadYamlSnapshot(); }, 5000);
+
+// Marks registers that are already on the current dashboard.
+function syncPinButtons() {
+  document.querySelectorAll(".dashboard-add-btn").forEach((btn) => {
+    const pinned = Dashboard.hasSeries(btn.dataset.name);
+    btn.classList.toggle("pinned", pinned);
+    btn.textContent = pinned ? "✓" : "+";
+    btn.title = pinned ? "On the dashboard" : "Add to dashboard";
+  });
+}
+window.addEventListener("dashboard-changed", syncPinButtons);
 
 async function startDiscover() {
   if (scanning) return;
 
-  const ip     = document.getElementById("ip").value.trim();
-  const port   = parseInt(document.getElementById("port").value) || 502;
-  const unitId = parseInt(document.getElementById("unitId").value) || 1;
+  await startQueuedScan("scan_discover", {}, clearDiscoverData);
+}
 
-  if (!ip) { toast("Please enter a valid IP address.", true); return; }
+async function startQueuedScan(type, options, clearData, silent = false) {
+  const draft = getDraftTarget();
+  if (scanTargets.length === 0 && !draft) {
+    toast("Add at least one scan target first.", true);
+    return;
+  }
+
+  if (draft) {
+    const persisted = await persistDraftTarget();
+    if (!persisted) return;
+  }
 
   try { await ensureWs(); }
   catch (err) { toast("Cannot connect to scanner server: " + err.message, true); return; }
 
-  clearDiscoverData();
-  beginScan();
-  document.getElementById("progressPhase").style.display = "";
-  ws.send(JSON.stringify({ type: "scan_discover", id: scanId, ip, port, unitId }));
+  if (typeof clearData === "function") clearData();
+  scanQueue = [...scanTargets];
+  scanRequest = { type, options, silent };
+  beginScan(silent);
 }
 
-function beginScan() {
+function beginScan(silent = false) {
   scanning = true;
   scanId = Date.now().toString();
 
   document.getElementById("btnScan").disabled          = true;
-  document.getElementById("btnScanYaml").disabled      = true;
   document.getElementById("btnScanDiscover").disabled  = true;
-  document.getElementById("btnCancel").disabled        = false;
-  document.getElementById("progressCard").style.display = "";
-  document.getElementById("statsRow").style.display     = "";
+  document.getElementById("btnCancel").disabled        = !silent ? false : true;
+  document.getElementById("progressCard").style.display = silent ? "none" : "";
+  document.getElementById("statsRow").style.display     = silent ? "none" : "";
   document.getElementById("btnExport").disabled   = true;
-  setStatus("scanning");
+  if (!silent) setStatus("scanning");
+  sendNextTarget();
+}
+
+function sendNextTarget() {
+  const target = scanQueue.shift();
+  if (!target) {
+    endScan(false);
+    return;
+  }
+
+  scanId = `${Date.now()}-${target.ip}`;
+  const message = {
+    type: scanRequest.type,
+    id: scanId,
+    ip: target.ip,
+    port: target.port,
+    unitId: target.unitId,
+    ...(scanRequest.options || {}),
+  };
+  if (scanRequest.type === "scan_discover") {
+    document.getElementById("progressPhase").style.display = "";
+  }
+  document.getElementById("progressText").textContent = `Scanning ${target.ip} (${scanQueue.length + 1}/${scanTargets.length})`;
+  ws.send(JSON.stringify(message));
+}
+
+function finishTarget(withError) {
+  if (!scanning) return;
+  const silent = !!(scanRequest && scanRequest.silent);
+  if (withError && !silent) setStatus("error");
+  if (scanQueue.length > 0) {
+    if (withError && !silent) toast(`Target failed. Continuing with the next target.`, true);
+    sendNextTarget();
+  } else {
+    endScan(withError, silent);
+  }
 }
 
 function cancelScan() {
@@ -672,17 +967,18 @@ function cancelScan() {
   ws.send(JSON.stringify({ type: "cancel", id: scanId }));
 }
 
-function endScan(withError) {
+function endScan(withError, silent = false) {
   scanning = false;
   document.getElementById("btnScan").disabled          = false;
-  document.getElementById("btnScanYaml").disabled      = false;
   document.getElementById("btnScanDiscover").disabled  = false;
   document.getElementById("btnCancel").disabled        = true;
   document.getElementById("progressPhase").style.display = "none";
+  document.getElementById("progressCard").style.display = silent ? "none" : "";
   const rows = activeTab === "raw" ? rawRows : activeTab === "yaml" ? yamlRows : discoverRows;
   document.getElementById("btnExport").disabled = rows.length === 0;
-  setStatus(withError ? "error" : "connected");
-  if (!withError) toast(`Scan complete — ${rows.length} registers found.`);
+  renderScanTargets();
+  if (!silent) setStatus(withError ? "error" : "connected");
+  if (!withError && !silent) toast(`Scan complete — ${rows.length} registers found.`);
 }
 
 // ── Result rendering ───────────────────────────────────────────────────────────
@@ -788,8 +1084,15 @@ function appendYamlRow(row) {
     <td class="scaled-val">${esc(displayVal)}</td>
     <td class="unit">${esc(unit || "—")}</td>
     <td class="dtype">${esc(dataType || "—")}</td>
-    <td>${badgeHtml(sanity)}</td>
+    <td class="sanity-cell" style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+      ${badgeHtml(sanity)}
+      <button class="dashboard-add-btn" type="button" data-name="${esc(name)}" title="Add to dashboard" aria-label="Add ${esc(shortName)} to dashboard">+</button>
+    </td>
   `;
+  const addButton = tr.querySelector(".dashboard-add-btn");
+  if (addButton) {
+    addButton.addEventListener("click", () => Dashboard.addSeries(name));
+  }
   body.appendChild(tr);
 }
 
@@ -1015,10 +1318,15 @@ function toast(msg, isErr = false) {
 }
 
 // ── Wire buttons ───────────────────────────────────────────────────────────────
+document.getElementById("targetIp").addEventListener("input", renderScanTargets);
+document.getElementById("targetPort").addEventListener("input", renderScanTargets);
+document.getElementById("targetUnitId").addEventListener("input", renderScanTargets);
+
 document.getElementById("btnScan").addEventListener("click", startScan);
-document.getElementById("btnScanYaml").addEventListener("click", startYamlScan);
+document.getElementById("btnScanYaml").addEventListener("click", () => startYamlScan());
 document.getElementById("btnScanDiscover").addEventListener("click", startDiscover);
 document.getElementById("btnCancel").addEventListener("click", cancelScan);
+document.getElementById("btnSaveTargets").addEventListener("click", saveScanTargets);
 
 // ── Custom sanity check (raw tab) ──────────────────────────────────────────────
 document.getElementById("sanMin").addEventListener("change", revalidateRawTable);
@@ -1052,6 +1360,8 @@ function revalidateRawTable() {
 
 // ── Auto-connect ───────────────────────────────────────────────────────────────
 connect();
+loadScanTargets();
+Dashboard.init();
 </script>
 </body>
 </html>

@@ -9,9 +9,8 @@ if "%1"=="" (
     echo Usage: install.bat ^<IP_ADDRESS^> [PORT]
     echo.
     echo Examples:
-    echo   install.bat 192.168.1.40
     echo   install.bat 10.0.0.5
-    echo   install.bat 192.168.1.40 3000
+    echo   install.bat 10.0.0.5 3000
     echo.
     exit /b 1
 )
